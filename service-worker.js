@@ -1,4 +1,4 @@
-const CACHE_NAME = "jm-v20-auditoria-profissional";
+const CACHE_NAME = "jm-v21-rafacar-mapa-icones";
 const ASSETS = [
   "./",
   "./index.html",

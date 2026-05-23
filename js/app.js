@@ -10,7 +10,7 @@
   const { auth, secondaryAuth, db, ts, arrayUnion, emailIsAdmin } = window.JM.firebase;
   const cfg = window.JM_CONFIG || {};
   const SYSTEM_SIGNATURE = "Powered by thIAguinho Soluções Digitais";
-  const LOGIN_FLOW_VERSION = "jm-v20-auditoria-profissional";
+  const LOGIN_FLOW_VERSION = "jm-v21-rafacar-mapa-icones";
   let trackerTimer = null;
   let trackerBusy = false;
 
