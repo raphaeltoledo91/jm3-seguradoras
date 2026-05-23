@@ -32,11 +32,11 @@
     const rows = Object.values(vehicles || {}).map((v, i) => {
       const x = 90 + i * 170;
       const y = 120 + (i % 2) * 120;
-      return `<g><circle cx="${x}" cy="${y}" r="18" fill="#38bdf8"/><text x="${x + 28}" y="${y + 5}" fill="#e2e8f0" font-size="14" font-weight="700">${esc(v.placa || v.id)}</text></g>`;
+      return `<g><circle cx="${x}" cy="${y}" r="18" fill="#2dd4bf"/><text x="${x + 28}" y="${y + 5}" fill="#edf7f3" font-size="14" font-weight="700">${esc(v.placa || v.id)}</text></g>`;
     }).join("");
     const callRows = Object.values(calls || {}).slice(0, 6).map((c, i) => `<text x="32" y="${330 + i * 24}" fill="#94a3b8" font-size="13">${esc(c.protocolo || c.cliente || "Chamado")}: ${esc(c.status || "")}</text>`).join("");
     container.innerHTML = `<svg class="fallback-map" viewBox="0 0 820 520" preserveAspectRatio="none" role="img" aria-label="Mapa operacional em fallback">
-      <rect width="820" height="520" fill="#07111f"/>
+      <rect width="820" height="520" fill="#07110f"/>
       <path d="M80 380 C240 120 380 420 680 140" fill="none" stroke="#22c55e" stroke-width="5" stroke-linecap="round"/>
       ${rows}
       ${callRows}
@@ -117,31 +117,142 @@
     return pointFrom(vehicle && (vehicle.location || vehicle.mobileLocation || vehicle.driverPhoneLocation || vehicle.phoneLocation));
   }
 
-  function vehicleIcon(L, vehicle, selected) {
+  const VEHICLE_ICON_BASE = "assets/vehicle-icons/carsv2-map/";
+  const VEHICLE_ICONS = {
+    motorcycle: "motorcycle_base.png",
+    scooter: "scooter_base.png",
+    car: "carroPasseio_base.png",
+    utility: "carroUtilitario_base.png",
+    truck: "truckBau_base.png",
+    truckHorse: "truckCavalo_base.png",
+    bus: "bus_base.png",
+    van: "vanUtilitario_base.png",
+    pickup: "carroUtilitario_base.png",
+    tractor: "tractor_base.png",
+    bicycle: "bicycle_base.png",
+    person: "person_base.png",
+    boat: "boat_base.png",
+    ship: "ship_base.png",
+    airplane: "plane_base.png",
+    helicopter: "helicopter_base.png",
+    crane: "crane_base.png",
+    offroad: "offroad_base.png",
+    default: "default_base.png"
+  };
+
+  function normalizeText(value) {
+    return String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+  }
+
+  function detectVehicleCategory(vehicle) {
+    const raw = normalizeText([
+      vehicle && vehicle.tipo,
+      vehicle && vehicle.type,
+      vehicle && vehicle.category,
+      vehicle && vehicle.apelido,
+      vehicle && vehicle.modelo,
+      vehicle && vehicle.model,
+      vehicle && vehicle.placa,
+      vehicle && vehicle.id
+    ].filter(Boolean).join(" "));
+    if (/munck|munk|guincho|guindaste|crane|plataforma/.test(raw)) return "crane";
+    if (/moto|motorcycle|motocicleta/.test(raw)) return "motorcycle";
+    if (/scooter/.test(raw)) return "scooter";
+    if (/cavalo|carreta/.test(raw)) return "truckHorse";
+    if (/caminhao|truck|bau|baú/.test(raw)) return "truck";
+    if (/onibus|ônibus|bus/.test(raw)) return "bus";
+    if (/van|utilitario|utilitário|furgao|furgão/.test(raw)) return "van";
+    if (/pickup|pick-up|hilux|s10|ranger|amarok|frontier/.test(raw)) return "pickup";
+    if (/trator|tractor/.test(raw)) return "tractor";
+    if (/bike|bicycle|bicicleta/.test(raw)) return "bicycle";
+    if (/pessoa|person|motorista/.test(raw)) return "person";
+    if (/barco|boat/.test(raw)) return "boat";
+    if (/navio|ship/.test(raw)) return "ship";
+    if (/aviao|avião|plane/.test(raw)) return "airplane";
+    if (/helicoptero|helicóptero|helicopter/.test(raw)) return "helicopter";
+    if (/offroad|off-road|quadriciclo/.test(raw)) return "offroad";
+    if (/util/.test(raw)) return "utility";
+    return "car";
+  }
+
+  function vehicleIconUrl(category) {
+    return VEHICLE_ICON_BASE + (VEHICLE_ICONS[category] || VEHICLE_ICONS.default);
+  }
+
+  function vehicleCourse(vehicle) {
+    const live = vehicle && (vehicle.location || vehicle.mobileLocation || vehicle.driverPhoneLocation || vehicle.phoneLocation) || {};
+    const value = live.course || live.heading || live.bearing || vehicle && (vehicle.course || vehicle.heading || vehicle.bearing);
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(((n % 360) + 360) % 360);
+  }
+
+  function vehicleStatusTone(vehicle) {
     const gpsSource = String(vehicle && (vehicle.gpsSource || vehicle.trackerStatus || "") || "").toLowerCase();
     const isPhoneGps = gpsSource.includes("driver_phone") || gpsSource.includes("celular");
     const status = String(vehicle && vehicle.status || "").toLowerCase();
-    const unavailable = status.includes("manut") || status.includes("indispon");
+    if (status.includes("manut") || status.includes("indispon")) return "blocked";
+    if (isPhoneGps) return "phone";
+    if (status.includes("atendimento") || status.includes("rota") || status.includes("despach")) return "busy";
+    return "online";
+  }
+
+  function vehicleSourceLabel(vehicle) {
+    const gpsSource = String(vehicle && (vehicle.gpsSource || vehicle.trackerStatus || "") || "");
+    if (gpsSource.toLowerCase().includes("driver_phone") || gpsSource.toLowerCase().includes("celular")) return "GPS celular";
+    return vehicle && (vehicle.trackerStatus || vehicle.gpsSource) || "GPS/Tracker";
+  }
+
+  function vehiclePopupHtml(vehicle, livePoint) {
+    const title = esc(vehicle && (vehicle.placa || vehicle.id || "Veículo") || "Veículo");
+    const subtitle = esc(vehicle && (vehicle.apelido || vehicle.tipo || "Frota JM") || "Frota JM");
+    const status = esc(vehicle && vehicle.status || "Disponível");
+    const source = esc(vehicleSourceLabel(vehicle));
+    const updated = esc(vehicle && (vehicle.lastPhoneGpsAt || vehicle.lastTrackerAt || vehicle.updatedAt) || "");
+    const coords = livePoint ? `${Number(livePoint.lat).toFixed(5)}, ${Number(livePoint.lng).toFixed(5)}` : "sem coordenada";
+    const category = esc(detectVehicleCategory(vehicle));
+    return `<div class="jm-vehicle-popup">
+      <div class="jm-vehicle-popup-head">
+        <span class="jm-vehicle-popup-icon"><img src="${esc(vehicleIconUrl(category))}" alt=""></span>
+        <div><b>${title}</b><small>${subtitle}</small></div>
+      </div>
+      <div class="jm-vehicle-popup-grid">
+        <span><small>Status</small><b>${status}</b></span>
+        <span><small>Origem GPS</small><b>${source}</b></span>
+        <span><small>Coordenadas</small><b>${esc(coords)}</b></span>
+        <span><small>Atualização</small><b>${updated || "-"}</b></span>
+      </div>
+    </div>`;
+  }
+
+  function vehicleIcon(L, vehicle, selected) {
+    const category = detectVehicleCategory(vehicle);
+    const tone = vehicleStatusTone(vehicle);
     const label = esc(vehicle && (vehicle.placa || vehicle.id || "JM") || "JM");
     const title = esc(vehicle && (vehicle.apelido || vehicle.tipo || "Frota") || "Frota");
+    const course = vehicleCourse(vehicle);
+    const size = selected ? 54 : 46;
     const classes = [
-      "jm-vehicle-marker",
+      "jm-vehicle-image-marker",
+      "tone-" + tone,
       selected ? "is-selected" : "",
-      isPhoneGps ? "is-phone-gps" : "",
-      unavailable ? "is-unavailable" : ""
+      size < 60 ? "marker-compact" : "marker-detailed"
     ].filter(Boolean).join(" ");
     return L.divIcon({
       className: "jm-vehicle-marker-wrap",
-      html: `<div class="${classes}" title="${title}">
-        <span class="jm-vehicle-body"></span>
-        <span class="jm-vehicle-cab"></span>
-        <span class="jm-vehicle-wheel wheel-a"></span>
-        <span class="jm-vehicle-wheel wheel-b"></span>
+      html: `<div class="${classes}" title="${title}" style="--marker-size:${size}px">
+        <span class="jm-vehicle-image-core" style="transform: rotate(${course}deg)">
+          <img class="jm-vehicle-image-img" src="${esc(vehicleIconUrl(category))}" alt="" loading="eager" decoding="async">
+        </span>
+        <span class="jm-vehicle-status-dot"></span>
         <strong>${label}</strong>
       </div>`,
-      iconSize: [68, 42],
-      iconAnchor: [34, 34],
-      popupAnchor: [0, -34]
+      iconSize: [size + 36, size + 28],
+      iconAnchor: [Math.round((size + 36) / 2), Math.round(size / 2)],
+      popupAnchor: [0, -Math.round(size * 0.56)]
     });
   }
 
@@ -183,7 +294,7 @@
     }).filter((row) => row.pts.length);
     if (!located.length && !routedCalls.length) {
       resetMap(containerId, container);
-      container.innerHTML = `<div style="height:100%;display:grid;place-items:center;padding:24px;text-align:center;background:#07111f">
+      container.innerHTML = `<div style="height:100%;display:grid;place-items:center;padding:24px;text-align:center;background:#07110f">
         <div>
           <h3>Mapa aguardando dados reais</h3>
           <p class="muted small">Configure o tracker no <b>superadmin.html</b> ou registre um chamado com origem/destino validados para aparecer no mapa.</p>
@@ -195,11 +306,12 @@
       const L = await loadLeaflet();
       resetMap(containerId, container);
       container.innerHTML = "";
-      const map = L.map(containerId, { scrollWheelZoom: false });
+      const map = L.map(containerId, { scrollWheelZoom: false, preferCanvas: true, zoomControl: false });
       liveMaps[containerId] = map;
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      L.control.zoom({ position: "bottomright" }).addTo(map);
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
         maxZoom: 19,
-        attribution: "&copy; OpenStreetMap"
+        attribution: "&copy; OpenStreetMap &copy; CARTO"
       }).addTo(map);
       const bounds = [];
       located.forEach((vehicle) => {
@@ -208,11 +320,14 @@
         const p = [Number(livePoint.lat), Number(livePoint.lng)];
         bounds.push(p);
         const isSelected = options.selectedVehicleId && vehicle.id === options.selectedVehicleId;
-        const source = String(vehicle.gpsSource || "").includes("driver_phone") ? "GPS celular" : (vehicle.trackerStatus || "GPS/Tracker");
         const marker = L.marker(p, { icon: vehicleIcon(L, vehicle, isSelected), zIndexOffset: isSelected ? 900 : 0 }).addTo(map)
-          .bindPopup(`<b>${esc(vehicle.placa || vehicle.id || "")}</b><br>${esc(vehicle.apelido || vehicle.tipo || "")}<br>${esc(source)}<br>${vehicle.lastPhoneGpsAt ? "Celular: " + esc(vehicle.lastPhoneGpsAt) : ""}`);
+          .bindPopup(vehiclePopupHtml(vehicle, livePoint), {
+            className: "jm-vehicle-leaflet-popup",
+            maxWidth: 360,
+            autoPanPadding: [24, 24]
+          });
         if (isSelected) {
-          L.circleMarker(p, { radius: 17, weight: 4, color: "#22c55e", fillOpacity: 0.08 }).addTo(map);
+          L.circleMarker(p, { radius: 24, weight: 2, color: "#2dd4bf", fillOpacity: 0.08, opacity: 0.72 }).addTo(map);
           marker.openPopup();
         }
       });
@@ -221,13 +336,13 @@
         pts.forEach((p) => {
           const latlng = [p.point.lat, p.point.lng];
           bounds.push(latlng);
-          const kindColor = p.kind === "origin" ? "#22c55e" : p.kind === "destination" ? "#ef4444" : p.kind === "driver_phone" ? "#a78bfa" : p.kind === "vehicle" ? "#38bdf8" : "#f59e0b";
+          const kindColor = p.kind === "origin" ? "#22c55e" : p.kind === "destination" ? "#ef4444" : p.kind === "driver_phone" ? "#a78bfa" : p.kind === "vehicle" ? "#2dd4bf" : "#f8b84e";
           L.circleMarker(latlng, { radius: callSelected ? 9 : 6, weight: callSelected ? 4 : 2, color: kindColor, fillOpacity: callSelected ? 0.45 : 0.25 }).addTo(map).bindPopup(`<b>${esc(p.label || "Ponto")}</b><br>${esc(call.protocolo || call.cliente || "Chamado")}`);
         });
         if (pts.length >= 2) await addRouteLayer(L, map, call, pts, bounds);
       }
-      if (bounds.length === 1) map.setView(bounds[0], 14);
-      else map.fitBounds(bounds, { padding: [32, 32] });
+      if (bounds.length === 1) map.setView(bounds[0], 15);
+      else map.fitBounds(bounds, { padding: [48, 48] });
       setTimeout(() => map.invalidateSize(), 120);
     } catch (err) {
       console.warn(err);

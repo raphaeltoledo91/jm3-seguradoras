@@ -21,9 +21,11 @@ window.JM_CONFIG = {
   },
   auth: {
     adminEmails: [
+      "jm@jm.com.br",
       "jm@jm.com"
     ],
     superadminEmails: [
+      "jm@jm.com.br",
       "jm@jm.com"
     ],
     autoRepairGestorLogin: true

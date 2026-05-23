@@ -7,7 +7,7 @@ PWA operacional para guinchos e seguradoras, com central de despacho, mapa, rast
 - Painel principal: `jm.html`
 - Motorista: `motorista.html`
 - Superadmin: `superadmin.html`
-- E-mail inicial liberado: `jm@jm.com`
+- E-mail inicial liberado: `jm@jm.com.br`
 
 Após o primeiro acesso, cadastre os usuários reais em Equipe/Superadmin e remova contas provisórias que não serão usadas em produção.
 
@@ -31,7 +31,7 @@ O servidor usa `process.env.PORT` quando disponível, então funciona em Railway
 
 1. Publicar `firestore.rules` no Firebase.
 2. Ativar autenticação por e-mail/senha no Firebase Authentication.
-3. Criar o primeiro superadmin com `jm@jm.com`.
+3. Criar o primeiro superadmin com `jm@jm.com.br`.
 4. Configurar Tracker, Cloudinary e mapa no Superadmin.
 5. Cadastrar equipe, frota e permissões reais.
 6. Testar abertura de rotas, mapa, chamados, fechamento pelo motorista e financeiro.

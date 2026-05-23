@@ -9,6 +9,7 @@ build/
 coverage/
 .firebase/
 .railway/
+.reference/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
