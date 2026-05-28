@@ -9,7 +9,27 @@
 
   function toLatLng(value) {
     const p = pointFrom(value);
-    return p ? { lat: Number(p.lat), lng: Number(p.lng) } : null;
+    if (!p) return null;
+    const lat = Number(p.lat);
+    const lng = Number(p.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    if (Math.abs(lat) < 0.000001 && Math.abs(lng) < 0.000001) return null;
+    return { lat, lng };
+  }
+
+  function vehiclePoint(vehicle) {
+    return toLatLng(vehicle && (
+      vehicle.location ||
+      vehicle.lastLocation ||
+      vehicle.lastKnownLocation ||
+      vehicle.trackerLocation ||
+      vehicle.trackerLastLocation ||
+      vehicle.trackerPosition ||
+      vehicle.lastPosition ||
+      vehicle.mobileLocation ||
+      vehicle.driverPhoneLocation ||
+      vehicle.phoneLocation
+    ));
   }
 
   function cleanText(value) {
@@ -158,7 +178,7 @@
       script.async = true;
       script.defer = true;
       script.onerror = () => reject(new Error("Não consegui carregar o Google Maps. Verifique a chave salva no superadmin."));
-      script.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(key) + "&libraries=places,geometry,marker&v=weekly&callback=" + callbackName;
+      script.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(key) + "&libraries=places,geometry,marker&v=weekly&loading=async&callback=" + callbackName;
       document.head.appendChild(script);
     }).catch((err) => {
       googleMapsPromise = null;
@@ -444,10 +464,10 @@
     const target = toLatLng(origin);
     if (!target) throw new Error("Origem sem coordenadas para calcular a rota.");
     const dest = toLatLng(destination);
-    const located = Object.values(vehicles || {}).filter((v) => toLatLng(v.location));
+    const located = Object.values(vehicles || {}).filter((v) => vehiclePoint(v));
     const serviceRouteShared = dest ? await routeThroughPoints([target, dest], settings || {}) : null;
     const rankings = await Promise.all(located.map(async (vehicle) => {
-      const vPoint = toLatLng(vehicle.location);
+      const vPoint = vehiclePoint(vehicle);
       const toOrigin = await routeThroughPoints([vPoint, target], settings || {});
       const fullRoute = await routeThroughPoints([vPoint, target, dest].filter(Boolean), settings || {});
       const score = (toOrigin ? toOrigin.durationSeconds : 999999) + statusPenalty(vehicle);

@@ -53,6 +53,10 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/driverAccess/$(email())).data.active != false
         && get(/databases/$(database)/documents/driverAccess/$(email())).data.role in ['driver', 'motorista'];
     }
+    function publicCallActive(token) {
+      return exists(/databases/$(database)/documents/publicCalls/$(token))
+        && get(/databases/$(database)/documents/publicCalls/$(token)).data.revoked != true;
+    }
     function managerPermit() {
       return signedIn()
         && exists(/databases/$(database)/documents/managerAccess/$(email()))
@@ -182,6 +186,34 @@ service cloud.firestore {
       allow create: if (isDriver() && request.resource.data.driverId == request.auth.uid) || canOperateCalls();
       allow update: if canOperateCalls();
       allow delete: if isOwner();
+    }
+
+    match /trackerProviders/{id} {
+      allow read: if isOffice() || isManager();
+      allow create, update, delete: if isOwner() || bootstrapAdminEmail();
+    }
+
+    match /publicCalls/{token} {
+      allow get: if resource.data.revoked != true;
+      allow list: if false;
+      allow create: if canOperateCalls();
+      allow update: if canOperateCalls()
+        || (isDriver()
+          && resource.data.revoked != true
+          && resource.data.callId == request.resource.data.callId
+          && request.resource.data.revoked != true);
+      allow delete: if isOwner();
+
+      match /messages/{messageId} {
+        allow read: if publicCallActive(token) || canOperateCalls();
+        allow create: if (
+          request.auth == null
+          && publicCallActive(token)
+          && get(/databases/$(database)/documents/publicCalls/$(token)).data.chatEnabled != false
+          && request.resource.data.senderType == 'client'
+        ) || canOperateCalls();
+        allow update, delete: if canOperateCalls();
+      }
     }
 
     match /maintenance/{id} {

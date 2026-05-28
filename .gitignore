@@ -10,6 +10,8 @@ coverage/
 .firebase/
 .railway/
 .reference/
+.incoming/
+.artifacts/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

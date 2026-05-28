@@ -1,4 +1,4 @@
-const CACHE_NAME = "jm-v21-rafacar-mapa-icones";
+﻿const CACHE_NAME = "jm-v25-laudos-financeiro-layout";
 const ASSETS = [
   "./",
   "./index.html",
@@ -6,6 +6,8 @@ const ASSETS = [
   "./formulario.html",
   "./motorista.html",
   "./superadmin.html",
+  "./cliente-chamado.html",
+  "./relatorio.html",
   "./manifest.json",
   "./css/style.css",
   "./js/config.firebase.js",

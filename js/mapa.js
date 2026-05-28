@@ -66,6 +66,15 @@
     const router = window.JM && (window.JM.freeRouter || window.JM.googleMaps);
     const cleanPoints = pts.map((p) => p.point).filter(Boolean);
     let route = null;
+    const hasLivePhoneGps = pts.some((p) => p && p.kind === "driver_phone");
+    const storedGeometry = hasLivePhoneGps ? null : call && (call.routeGeometry || call.routeMetrics && call.routeMetrics.fullRoute && call.routeMetrics.fullRoute.geometry);
+    const storedLatLngs = storedGeometry ? geoJsonToLatLngs(storedGeometry) : [];
+    if (storedLatLngs.length >= 2) {
+      storedLatLngs.forEach((p) => bounds.push(p));
+      L.polyline(storedLatLngs, { color: "#22c55e", weight: 6, opacity: 0.86 }).addTo(map)
+        .bindPopup(routeTitle(call, { isPrecise: true, distanceText: call.routeDistanceText || "" }, routeKm(pts)));
+      return { source: "stored_route", isPrecise: true };
+    }
     if (router && typeof router.routeThroughPoints === "function" && cleanPoints.length >= 2) {
       route = await router.routeThroughPoints(cleanPoints, window.JM_MAP_SETTINGS || {});
     }

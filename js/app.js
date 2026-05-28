@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   "use strict";
 
   const {
@@ -7,12 +7,13 @@
     statusKey, statusLabel, isFinalStatus: utilIsFinalStatus, maskPhone, phoneWhatsappUrl,
     geometryToFirestore, setupCollapsiblePanels
   } = window.JM.utils;
-  const { auth, secondaryAuth, db, ts, arrayUnion, emailIsAdmin } = window.JM.firebase;
+  const { auth, secondaryAuth, db, ts, arrayUnion, emailIsAdmin, getRealtimeDb, rtdbKey } = window.JM.firebase;
   const cfg = window.JM_CONFIG || {};
   const SYSTEM_SIGNATURE = "Powered by thIAguinho Soluções Digitais";
-  const LOGIN_FLOW_VERSION = "jm-v21-rafacar-mapa-icones";
+  const LOGIN_FLOW_VERSION = "jm-v25-laudos-financeiro-layout";
   let trackerTimer = null;
   let trackerBusy = false;
+  let mapRefreshTimer = null;
 
   const state = {
     user: null,
@@ -25,6 +26,7 @@
     maintenance: {},
     customers: {},
     integrationInbox: {},
+    trackerProviders: {},
     settings: {},
     addresses: { origin: null, destination: null, waypoints: [] },
     smartRoute: null,
@@ -42,7 +44,11 @@
     editingTransactionId: null,
     editingMaintenanceId: null,
     editingCustomerId: null,
-    editingPaymentId: null
+    editingPaymentId: null,
+    mobileGps: { vehicles: {}, calls: {} },
+    mobileGpsUnsubs: [],
+    publicChatMessages: {},
+    publicChatUnsubs: {}
   };
 
   const unsubscribers = [];
@@ -125,6 +131,21 @@
     return call && (call.routeExternalUrl || call.routeUrl) || mapsRouteUrl(call, vehicle);
   }
 
+  function quickCallLinks(call, vehicle, options) {
+    options = options || {};
+    if (!call) return "";
+    const stop = options.stopPropagation ? ` onclick="event.stopPropagation()"` : "";
+    const routeUrl = call.routeExternalUrl || call.routeUrl || mapsRouteUrl(call, vehicle || state.vehicles[call.vehicleId] || {});
+    const publicToken = call.publicToken && !call.publicRevoked ? call.publicToken : "";
+    const links = [];
+    if (routeUrl) links.push(`<a class="btn mini" target="_blank" rel="noopener noreferrer" href="${esc(routeUrl)}"${stop}>Rota</a>`);
+    if (publicToken) {
+      links.push(`<a class="btn mini" target="_blank" rel="noopener noreferrer" href="${esc(publicClientUrl(publicToken))}"${stop}>Cliente</a>`);
+      links.push(`<a class="btn mini" target="_blank" rel="noopener noreferrer" href="${esc(publicReportUrl(publicToken))}"${stop}>Laudo</a>`);
+    }
+    return links.length ? `<div class="call-quick-links">${links.join("")}</div>` : "";
+  }
+
   function canManageTracker() {
     return canOwnCompany() || normalizedRole(state.profile && state.profile.role) === "gerente";
   }
@@ -156,16 +177,54 @@
     return mergeNonEmpty(cfg.tracker || {}, state.settings.tracker || {});
   }
 
-  function openExternalUrl(url) {
-    const win = window.open(url, "_blank", "noopener,noreferrer");
-    if (win) win.opener = null;
-    return win;
+  function activeMobileGpsSettings() {
+    const base = mergeNonEmpty(cfg.mobileGps || {}, state.settings.mobileGps || {});
+    return Object.assign({ enabled: false, backend: "firestore", databaseURL: "", pollingMs: 10000, minIntervalMs: 20000, minDistanceMeters: 25 }, base || {});
   }
 
-  function openReportWindow() {
-    const win = window.open("", "_blank");
-    if (win) win.opener = null;
-    return win;
+  function isMobileGpsEnabled() {
+    const gps = activeMobileGpsSettings();
+    return gps.enabled === true || gps.enabled === "true";
+  }
+
+  function isMobileGpsRealtime() {
+    const gps = activeMobileGpsSettings();
+    return isMobileGpsEnabled() && String(gps.backend || "firestore") === "realtime_database" && !!String(gps.databaseURL || "").trim();
+  }
+
+  function clearMobileGpsRealtimeListeners() {
+    (state.mobileGpsUnsubs || []).splice(0).forEach((fn) => {
+      try { fn(); } catch (_) {}
+    });
+    state.mobileGps = { vehicles: {}, calls: {} };
+  }
+
+  function scheduleMapRefresh(delay) {
+    clearTimeout(mapRefreshTimer);
+    mapRefreshTimer = setTimeout(() => {
+      try { refreshMaps(); } catch (err) { console.warn("Falha ao atualizar mapa", err); }
+    }, delay == null ? 120 : delay);
+  }
+
+  function startMobileGpsRealtimeListeners() {
+    clearMobileGpsRealtimeListeners();
+    if (!isMobileGpsRealtime() || !getRealtimeDb) return;
+    const gps = activeMobileGpsSettings();
+    const rtdb = getRealtimeDb(gps.databaseURL);
+    if (!rtdb) return;
+    const refs = [
+      { key: "vehicles", ref: rtdb.ref("mobileGps/vehicles") },
+      { key: "calls", ref: rtdb.ref("mobileGps/calls") }
+    ];
+    refs.forEach((item) => {
+      const handler = (snap) => {
+        const value = snap.val() || {};
+        state.mobileGps[item.key] = value;
+        scheduleMapRefresh(80);
+      };
+      item.ref.on("value", handler, (err) => console.warn("Falha RTDB GPS", item.key, err));
+      state.mobileGpsUnsubs.push(() => item.ref.off("value", handler));
+    });
   }
 
   function visibleRows(rows) {
@@ -174,7 +233,13 @@
 
   function storePoint(value) {
     const point = pointFrom(value);
-    return point ? { lat: point.lat, lng: point.lng } : null;
+    if (!point) return null;
+    if (Math.abs(Number(point.lat)) < 0.000001 && Math.abs(Number(point.lng)) < 0.000001) return null;
+    return { lat: point.lat, lng: point.lng };
+  }
+
+  function usefulPoint(value) {
+    return storePoint(value);
   }
 
   function storeAddress(address) {
@@ -302,6 +367,140 @@
     return "Geral";
   }
 
+  function round2(value) {
+    return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+  }
+
+  function trunc2(value) {
+    return Math.trunc((Number(value || 0) + Number.EPSILON) * 100) / 100;
+  }
+
+  function pct(value) {
+    const n = parseMoney(value || 0);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(100, n));
+  }
+
+  function towDefaults(type) {
+    return String(type || "leve") === "pesado"
+      ? { baseOut: 463.86, kmValue: 16.66, label: "Pesado acima de 1.500 kg / van / coletivo / carga / semirreboque acima de 750 kg" }
+      : { baseOut: 253.22, kmValue: 8.51, label: "Leve até 1.500 kg / moto / semirreboque até 750 kg" };
+  }
+
+  function brNumber(value) {
+    if (value == null || value === "") return "";
+    return String(Number(value || 0).toFixed(2)).replace(".", ",");
+  }
+
+  function setTowStatus(message, type) {
+    const el = $("towPricingStatus");
+    if (!el) return;
+    el.textContent = message;
+    el.className = "small " + (type || "muted");
+  }
+
+  function calculateTowPricing() {
+    const active = !!($("callTowActive") && $("callTowActive").checked);
+    const type = $("callTowType") ? $("callTowType").value : "leve";
+    const defaults = towDefaults(type);
+    const kmTotal = parseMoney($("callTowKm") && $("callTowKm").value || 0);
+    const franchiseKm = parseMoney($("callTowFranchiseKm") && $("callTowFranchiseKm").value || 0) || 0;
+    const baseOut = parseMoney($("callTowBaseOut") && $("callTowBaseOut").value || defaults.baseOut);
+    const kmValue = parseMoney($("callTowKmValue") && $("callTowKmValue").value || defaults.kmValue);
+    const discountPct = pct($("callTowDiscountPct") && $("callTowDiscountPct").value || 0);
+    const roundTrip = $("callTowRoundTrip") ? !!$("callTowRoundTrip").checked : true;
+    const subtractFranchise = $("callTowSubtractFranchise") ? !!$("callTowSubtractFranchise").checked : false;
+    const chargedKm = active ? Math.max(kmTotal - (subtractFranchise ? franchiseKm : 0), 0) : 0;
+    const factor = Math.max(0, 1 - discountPct / 100);
+    const netOut = active ? round2(baseOut * factor) : 0;
+    const netKm = active ? trunc2(kmValue * factor) : 0;
+    const oneWay = active ? round2(netOut + chargedKm * netKm) : 0;
+    const total = active ? round2(oneWay * (roundTrip ? 2 : 1)) : 0;
+    const subtotal = active ? round2(baseOut + chargedKm * kmValue) : 0;
+    const discountValue = active ? round2(subtotal - oneWay) : 0;
+    const data = {
+      ativo: active,
+      tipo: type,
+      tipoLabel: defaults.label,
+      kmTotal,
+      franquiaKm: franchiseKm,
+      abaterFranquia: subtractFranchise,
+      kmExcedente: chargedKm,
+      kmCobrado: chargedKm,
+      cobrarIdaVolta: roundTrip,
+      idaVolta: roundTrip,
+      valorSaida: baseOut,
+      valorKmAdicional: kmValue,
+      descontoPct: discountPct,
+      descPct: discountPct,
+      ajustePct: discountPct,
+      saidaLiquida: netOut,
+      kmLiquido: netKm,
+      valorIda: oneWay,
+      subtotal,
+      descontoValor: discountValue,
+      total,
+      obs: $("callTowNotes") ? $("callTowNotes").value.trim() : ""
+    };
+    if ($("callTowNetOut")) $("callTowNetOut").value = money(netOut);
+    if ($("callTowNetKm")) $("callTowNetKm").value = money(netKm);
+    if ($("callTowOneWay")) $("callTowOneWay").value = money(oneWay);
+    if ($("callTowTotal")) $("callTowTotal").value = money(total);
+    return data;
+  }
+
+  function setTowPricingForm(data) {
+    const g = data || {};
+    const type = g.tipo || "leve";
+    const defaults = towDefaults(type);
+    if ($("callTowActive")) $("callTowActive").checked = !!g.ativo;
+    setValue("callTowType", type);
+    setValue("callTowKm", g.kmTotal != null ? brNumber(g.kmTotal) : "");
+    setValue("callTowFranchiseKm", g.franquiaKm != null ? brNumber(g.franquiaKm) : "15,00");
+    setValue("callTowBaseOut", g.valorSaida != null ? brNumber(g.valorSaida) : brNumber(defaults.baseOut));
+    setValue("callTowKmValue", g.valorKmAdicional != null ? brNumber(g.valorKmAdicional) : brNumber(defaults.kmValue));
+    setValue("callTowDiscountPct", g.descontoPct ?? g.descPct ?? g.ajustePct ?? 0);
+    if ($("callTowRoundTrip")) $("callTowRoundTrip").checked = g.cobrarIdaVolta ?? g.idaVolta ?? true;
+    if ($("callTowSubtractFranchise")) $("callTowSubtractFranchise").checked = !!(g.abaterFranquia || g.usarFranquia || g.abaterKmFranquia);
+    setValue("callTowNotes", g.obs || "");
+    calculateTowPricing();
+  }
+
+  function updateTowDefaultsByType() {
+    const type = $("callTowType") ? $("callTowType").value : "leve";
+    const defaults = towDefaults(type);
+    setValue("callTowBaseOut", brNumber(defaults.baseOut));
+    setValue("callTowKmValue", brNumber(defaults.kmValue));
+    calculateTowPricing();
+  }
+
+  function routeKmForTow() {
+    const best = bestSmartRoute();
+    const meters = best && best.serviceRoute && best.serviceRoute.distanceMeters
+      || best && best.fullRoute && best.fullRoute.distanceMeters
+      || best && best.toOrigin && best.toOrigin.distanceMeters
+      || 0;
+    if (meters) return Math.max(0, Math.round((meters / 1000) * 100) / 100);
+    const points = routePointsFromForm(false);
+    return routeKm(points);
+  }
+
+  function applyRouteKmToTowPricing() {
+    const km = routeKmForTow();
+    if (!km) return setTowStatus("Não há KM calculado. Primeiro busque origem/destino ou trace a rota inteligente.", "danger");
+    setValue("callTowKm", brNumber(km));
+    if ($("callTowActive")) $("callTowActive").checked = true;
+    const data = calculateTowPricing();
+    setTowStatus("KM da rota aplicado: " + brNumber(km) + " km. Total atual: " + money(data.total) + ".", "ok");
+  }
+
+  function applyTowTotalToPrice() {
+    const data = calculateTowPricing();
+    if (!data.ativo) return setTowStatus("Marque Cobrar no chamado antes de aplicar o total.", "danger");
+    setValue("callPrice", brNumber(data.total));
+    setTowStatus("Total do guincho aplicado no valor previsto: " + money(data.total) + ".", "ok");
+  }
+
 
   async function getDocData(collectionName, id, localCache) {
     if (!id) return null;
@@ -324,20 +523,56 @@
     return call && (call.protocolo || call.insuranceProtocol || call.id) || fallbackId || "";
   }
 
-  const REQUIRED_PROOF_PHOTOS = ["front", "rear", "right", "left", "dashboard", "damage", "final"];
+  const REQUIRED_PROOF_PHOTOS = ["front", "rear", "right", "left", "dashboard", "load_after", "delivery_front", "delivery_rear", "delivery_right", "delivery_left", "delivery_dashboard", "damage", "final"];
   const REQUIRED_PROOF_STAGES = ["retirada", "carregamento", "transporte", "entrega", "finalizacao"];
+  const PROOF_STAGE_LABELS = { retirada: "Retirada", carregamento: "Carregamento", transporte: "Transporte", entrega: "Entrega", finalizacao: "Finalização" };
+  const PROOF_PHOTO_LABELS = {
+    front: "Frente",
+    rear: "Traseira",
+    right: "Lateral direita",
+    left: "Lateral esquerda",
+    dashboard: "Painel / odômetro",
+    load_after: "Carregado no caminhão",
+    delivery_front: "Entrega - frente",
+    delivery_rear: "Entrega - traseira",
+    delivery_right: "Entrega - lateral direita",
+    delivery_left: "Entrega - lateral esquerda",
+    delivery_dashboard: "Entrega - painel / odômetro",
+    damage: "Avarias",
+    final: "Comprovante final"
+  };
 
   function proofPhotos(call) {
     return Array.isArray(call && call.proofPhotos) ? call.proofPhotos.filter(Boolean) : [];
   }
 
+  function requiredProofPhotoTypes(call) {
+    const checklist = call && call.proofChecklist || {};
+    const required = [];
+    const add = (keys) => keys.forEach((key) => {
+      if (REQUIRED_PROOF_PHOTOS.includes(key) && !required.includes(key)) required.push(key);
+    });
+    if (checklist.retirada && !["pendente", "justificado"].includes(checklist.retirada.status)) add(["front", "rear", "right", "left", "dashboard"]);
+    if (checklist.carregamento && !["pendente", "justificado"].includes(checklist.carregamento.status)) add(["front", "rear", "right", "left", "dashboard", "load_after"]);
+    if (checklist.entrega && !["pendente", "justificado"].includes(checklist.entrega.status)) add(["delivery_front", "delivery_rear", "delivery_right", "delivery_left", "delivery_dashboard", "final"]);
+    const hasAvaria = Object.values(checklist || {}).some((item) => item && String(item.status || "").toLowerCase().includes("avaria"));
+    if (hasAvaria) add(["damage"]);
+    return required;
+  }
+
   function callProofComplete(call) {
     const checklist = call && call.proofChecklist || {};
     const signature = call && call.customerSignature || {};
+    const phaseSignatures = call && call.phaseSignatures || {};
     const hasChecklist = REQUIRED_PROOF_STAGES.every((stage) => checklist[stage] && checklist[stage].status && checklist[stage].status !== "pendente");
-    const hasPhotos = REQUIRED_PROOF_PHOTOS.every((type) => proofPhotos(call).some((photo) => photo.type === type && photo.cloudinaryUrl));
-    const hasSignature = !!((signature.signatureUrl || signature.cloudinaryUrl) && signature.acceptedText);
-    return hasChecklist && hasPhotos && hasSignature;
+    const hasPhotos = requiredProofPhotoTypes(call).every((type) => proofPhotos(call).some((photo) => photo.type === type && photo.cloudinaryUrl));
+    const hasPhaseAcceptances = ["retirada", "entrega", "finalizacao"].every((phase) => {
+        const item = phaseSignatures[phase] || {};
+        const row = checklist[phase] || {};
+        const fallback = (phase === "entrega" || phase === "finalizacao") ? signature : {};
+        return row.status !== "pendente" && (row.justificativa || ((item.signatureUrl || item.cloudinaryUrl) && item.acceptedText) || (item.refused && item.refusalReason && item.acceptedText) || ((fallback.signatureUrl || fallback.cloudinaryUrl) && fallback.acceptedText) || (fallback.refused && fallback.refusalReason && fallback.acceptedText));
+      });
+    return hasChecklist && hasPhotos && hasPhaseAcceptances;
   }
 
   function proofStatus(call) {
@@ -351,6 +586,14 @@
     const status = proofStatus(call);
     const cls = status === "revisado" || status === "completo" ? "ok" : status === "parcial" ? "warn" : "danger";
     return `<span class="badge ${cls}">Provas: ${esc(status)}</span>`;
+  }
+
+  function proofPhotoLabel(type) {
+    return PROOF_PHOTO_LABELS[type] || type || "Foto";
+  }
+
+  function proofPhotoByType(photos, type) {
+    return (photos || []).find((photo) => photo && photo.type === type && photo.cloudinaryUrl) || null;
   }
 
   function enrichFinancialPayloadFromCall(payload, call) {
@@ -630,7 +873,7 @@
     const latId = isOrigin ? "callOriginLat" : "callDestLat";
     const lngId = isOrigin ? "callOriginLng" : "callDestLng";
     const statusId = isOrigin ? "originGeoStatus" : "destGeoStatus";
-    const point = pointFrom(address && (address.coords || address));
+    const point = usefulPoint(address && (address.coords || address));
     const normalized = {
       label: address && address.label || $(labelId).value.trim(),
       coords: point,
@@ -669,17 +912,17 @@
     const selectedVehicle = includeVehicle ? state.vehicles[$("callVehicle") && $("callVehicle").value] || null : null;
     const origin = addressFromInputs("origin");
     const destination = addressFromInputs("destination");
-    if (selectedVehicle && selectedVehicle.location) points.push(selectedVehicle.location);
-    if (origin && origin.coords) points.push(origin.coords);
-    (state.addresses.waypoints || []).forEach((wp) => { if (wp && wp.coords) points.push(wp.coords); });
-    if (destination && destination.coords) points.push(destination.coords);
+    if (selectedVehicle && usefulPoint(selectedVehicle.location)) points.push(usefulPoint(selectedVehicle.location));
+    if (origin && usefulPoint(origin.coords)) points.push(usefulPoint(origin.coords));
+    (state.addresses.waypoints || []).forEach((wp) => { if (wp && usefulPoint(wp.coords)) points.push(usefulPoint(wp.coords)); });
+    if (destination && usefulPoint(destination.coords)) points.push(usefulPoint(destination.coords));
     return points;
   }
 
   function addressFromInputs(kind) {
     const isOrigin = kind === "origin";
     const label = $(isOrigin ? "callOriginLabel" : "callDestLabel").value.trim();
-    const point = coords($(isOrigin ? "callOriginLat" : "callDestLat").value, $(isOrigin ? "callOriginLng" : "callDestLng").value);
+    const point = usefulPoint(coords($(isOrigin ? "callOriginLat" : "callDestLat").value, $(isOrigin ? "callOriginLng" : "callDestLng").value));
     const existing = state.addresses[kind] || {};
     if (!label && !point) return null;
     return {
@@ -709,8 +952,8 @@
     }
     const googleReady = gm.isGoogleConfigured ? gm.isGoogleConfigured(settings) : gm.isConfigured(settings);
     if (googleReady) {
-      addressStatus("originGeoStatus", "Google Maps ativo: digite o endereço, selecione a sugestão ou clique em buscar.", "ok");
-      addressStatus("destGeoStatus", "Google Maps ativo para destino. Se não aparecer sugestão, clique em buscar.", "ok");
+      addressStatus("originGeoStatus", "Google Maps ativo: digite o endereco, selecione a sugestao ou clique em buscar.", "ok");
+      addressStatus("destGeoStatus", "Google Maps ativo para destino. Se nao aparecer sugestao, clique em buscar.", "ok");
     } else {
       addressStatus("originGeoStatus", "Modo gratuito ativo: digite endereco com cidade/UF, cole link do Maps/Waze ou use coordenadas.", "warn");
       addressStatus("destGeoStatus", "Modo gratuito ativo: digite destino com cidade/UF, cole link do Maps/Waze ou use coordenadas.", "warn");
@@ -724,7 +967,7 @@
     const statusId = isOrigin ? "originGeoStatus" : "destGeoStatus";
     const value = $(labelId).value.trim();
     try {
-      if (!gm) throw new Error("Busca de mapa indisponível nesta tela.");
+      if (!gm) throw new Error("Busca de mapa indisponivel nesta tela.");
       if (!value) throw new Error("Digite um endereco com cidade/UF, cole um link do mapa ou informe coordenadas.");
       addressStatus(statusId, "Buscando endereco e coordenadas...", "muted");
       const addr = await gm.geocode(value, activeMapSettings());
@@ -745,7 +988,7 @@
     const text = point ? point.lat + "," + point.lng : ($(labelId).value.trim() || "");
     if (!text) return toast("Digite o endereco antes de abrir no Google Maps.", "danger");
     const url = window.JM.googleMaps && window.JM.googleMaps.googlePlaceUrl ? window.JM.googleMaps.googlePlaceUrl(text) : "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(text);
-    openExternalUrl(url);
+    window.open(url, "_blank", "noopener");
   }
 
   function useCurrentLocationAsOrigin() {
@@ -783,7 +1026,7 @@
       return `<div class="smart-route-card">
         <div>${badge} <b>${esc(v.placa || v.id || "Veículo")}</b> <span class="muted">${esc(v.apelido || v.tipo || "")}</span></div>
         <div>Até a origem: <b>${esc(r.toOrigin.distanceText || r.kmToOrigin.toFixed(1) + " km")}</b> · <b>${esc(r.toOrigin.durationTrafficText || r.toOrigin.durationText || r.minutesToOrigin + " min")}</b> · fonte: ${esc(src)}</div>
-        ${r.serviceRoute ? `<div>Origem → destino: <b>${esc(r.serviceRoute.distanceText || "")}</b> · <b>${esc(r.serviceRoute.durationTrafficText || r.serviceRoute.durationText || "")}</b></div>` : ""}
+        ${r.serviceRoute ? `<div>Origem ? destino: <b>${esc(r.serviceRoute.distanceText || "")}</b> · <b>${esc(r.serviceRoute.durationTrafficText || r.serviceRoute.durationText || "")}</b></div>` : ""}
         <div class="actions"><button class="btn primary" type="button" onclick="JM.app.applySmartVehicle('${esc(v.id)}')">Usar este veículo</button>${r.routeUrl ? `<a class="btn" target="_blank" rel="noopener noreferrer" href="${esc(r.routeUrl)}">Abrir rota</a>` : ""}</div>
       </div>`;
     }).join("");
@@ -804,14 +1047,16 @@
       await geocodeAddress("destination");
       destination = addressFromInputs("destination");
     }
-    const located = Object.values(state.vehicles || {}).map(vehicleWithLiveGps).filter((v) => vehicleLivePoint(v));
-    if (!located.length) return toast("Nenhum veículo tem posição de tracker/celular. Sincronize o tracker ou ative o GPS do motorista no painel do motorista.", "danger");
+    const fleetForRoute = appendMobileGpsSideMarkers(Object.fromEntries(Object.values(state.vehicles || {}).map(vehicleWithLiveGps).map((v) => [v.id, v])));
+    const located = Object.values(fleetForRoute).filter((v) => vehicleLivePoint(v));
+    if (!located.length) return toast(isMobileGpsEnabled() ? "Nenhum veículo tem posição de tracker/celular. Sincronize o tracker ou ative o GPS do motorista no painel do motorista." : "Nenhum veículo tem posição de tracker. Sincronize o tracker no painel gestor/superadmin.", "danger");
     $("smartRouteBox").innerHTML = "Calculando melhor veículo e tempo de rota...";
     try {
-      const rankings = await gm.rankVehicles(Object.fromEntries(Object.values(state.vehicles || {}).map(vehicleWithLiveGps).map((v) => [v.id, v])), finalOrigin.coords, destination && destination.coords, activeMapSettings());
+      const rankings = await gm.rankVehicles(fleetForRoute, finalOrigin.coords, destination && destination.coords, activeMapSettings());
       state.smartRoute = { origin: finalOrigin, destination, rankings, calculatedAt: new Date().toISOString() };
       const best = bestSmartRoute();
       if (best && !$("callVehicle").value) $("callVehicle").value = best.vehicle.id;
+      if (best && $("callTowKm") && !$("callTowKm").value) applyRouteKmToTowPricing();
       renderSmartRouteBox();
       toast("Rota inteligente calculada por ruas/rodovias quando o OSRM estiver disponível.", "ok");
     } catch (err) {
@@ -882,7 +1127,7 @@
     const points = routePointsFromForm(true);
     const url = external || (window.JM.googleMaps && window.JM.googleMaps.routeUrl(points) || mapsRouteUrl(points));
     if (!url) return toast("Informe origem/destino e selecione veículo com posição para abrir a rota.", "danger");
-    openExternalUrl(url);
+    window.open(url, "_blank");
   }
 
   function showView(name) {
@@ -949,6 +1194,8 @@
     addressStatus("destGeoStatus", "Destino opcional; pode ser link compartilhado ou coordenadas.", "muted");
     routeLinkStatus("Opcional: cole o link compartilhado da rota para abrir no Maps/Waze e, se ele trouxer coordenadas visíveis, preencher origem/destino.", "muted");
     if ($("callRouteExternalUrl")) $("callRouteExternalUrl").value = "";
+    setTowPricingForm({ ativo: false, tipo: "leve", franquiaKm: 15, cobrarIdaVolta: true });
+    setTowStatus("Ao traçar rota inteligente, o sistema pode sugerir o KM automaticamente. O gestor pode editar tudo antes de salvar.", "muted");
   }
 
   function resetTeamForm() {
@@ -1116,9 +1363,10 @@
 
   async function syncTrackerNow(manual) {
     const tracker = activeTrackerSettings();
-    if (!tracker.endpoint || !tracker.token) {
-      setTrackerStatus("Tracker sem endpoint/token. Configure no superadmin.", "warn");
-      if (manual) toast("Configure endpoint e token do Tracker no superadmin.", "danger");
+    const providers = visibleRows(state.trackerProviders).filter((p) => p.active !== false);
+    if (!providers.length && (!tracker.endpoint || !tracker.token)) {
+      setTrackerStatus("Tracker sem endpoint/token. Configure RAFA ou um provedor no superadmin.", "warn");
+      if (manual) toast("Configure endpoint e token do Tracker ou cadastre um provedor no superadmin.", "danger");
       return [];
     }
     if (!canManageTracker()) {
@@ -1128,13 +1376,15 @@
     if (trackerBusy) return [];
     trackerBusy = true;
     try {
-      setTrackerStatus("Sincronizando Tracker RAFA...", "info");
-      const positions = await window.JM.tracker.syncTrackerToFirestore(tracker, db, state.vehicles);
+      setTrackerStatus(providers.length ? "Sincronizando rastreadores ativos..." : "Sincronizando Tracker RAFA...", "info");
+      const positions = window.JM.tracker.syncAllTrackersToFirestore
+        ? await window.JM.tracker.syncAllTrackersToFirestore({ legacyTracker: tracker, providers, db, vehicles: state.vehicles })
+        : await window.JM.tracker.syncTrackerToFirestore(tracker, db, state.vehicles);
       const matched = positions.filter((p) => p.trackerMatched).length;
       const unmapped = positions.length - matched;
       const now = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-      const detail = unmapped > 0 ? ` (${unmapped} sem vínculo com placa; ajuste o deviceId no superadmin)` : "";
-      setTrackerStatus(`Tracker RAFA sincronizado: ${positions.length} posição(ões), ${matched} vinculada(s) às ${now}${detail}.`, unmapped > 0 ? "warn" : "ok");
+      const detail = unmapped > 0 ? ` (${unmapped} sem vinculo com placa; ajuste o deviceId no superadmin)` : "";
+      setTrackerStatus(`Rastreamento sincronizado: ${positions.length} posição(ões), ${matched} vinculada(s) às ${now}${detail}.`, unmapped > 0 ? "warn" : "ok");
       if (manual) toast(`${positions.length} posição(ões) sincronizada(s), ${matched} vinculada(s).${detail}`, unmapped > 0 ? "warn" : "ok");
       return positions;
     } catch (err) {
@@ -1153,22 +1403,61 @@
       trackerTimer = null;
     }
     const tracker = activeTrackerSettings();
-    if (!tracker.endpoint || !tracker.token) {
+    const providers = visibleRows(state.trackerProviders).filter((p) => p.active !== false);
+    if (!providers.length && (!tracker.endpoint || !tracker.token)) {
       setTrackerStatus("Tracker aguardando endpoint/token no superadmin.", "warn");
       return;
     }
-    const polling = Math.max(15000, Number(tracker.pollingMs || 30000));
-    setTrackerStatus("Tracker configurado. Atualização automática a cada " + Math.round(polling / 1000) + "s.", "ok");
+    const providerPolling = providers.length ? providers.reduce((min, p) => Math.min(min, Number(p.pollingMs || 30000)), 30000) : Number(tracker.pollingMs || 30000);
+    const polling = Math.max(15000, providerPolling);
+    setTrackerStatus("Rastreamento configurado. Atualização automática a cada " + Math.round(polling / 1000) + "s.", "ok");
     syncTrackerNow(false);
     trackerTimer = setInterval(() => syncTrackerNow(false), polling);
   }
 
+
+  function clearPublicChatListeners() {
+    Object.values(state.publicChatUnsubs || {}).forEach((fn) => {
+      try { fn(); } catch (_) {}
+    });
+    state.publicChatUnsubs = {};
+    state.publicChatMessages = {};
+  }
+
+  function publicChatUnreadCount(call) {
+    const token = call && call.publicToken;
+    const rows = token && state.publicChatMessages[token] || [];
+    return rows.filter((msg) => msg && msg.senderType === "client" && !msg.readAt).length;
+  }
+
+  function syncPublicChatListeners() {
+    const activeTokens = new Set(visibleRows(state.calls).filter((call) => call.publicToken && !call.publicRevoked).map((call) => call.publicToken));
+    Object.keys(state.publicChatUnsubs || {}).forEach((token) => {
+      if (activeTokens.has(token)) return;
+      try { state.publicChatUnsubs[token](); } catch (_) {}
+      delete state.publicChatUnsubs[token];
+      delete state.publicChatMessages[token];
+    });
+    activeTokens.forEach((token) => {
+      if (state.publicChatUnsubs[token]) return;
+      state.publicChatUnsubs[token] = db.collection("publicCalls").doc(token).collection("messages").orderBy("createdAt", "asc").limit(80).onSnapshot((snap) => {
+        const rows = [];
+        snap.forEach((doc) => rows.push({ id: doc.id, ...doc.data() }));
+        state.publicChatMessages[token] = rows;
+        renderAll();
+      }, (err) => {
+        console.warn("Falha ao ouvir chat público", err);
+        state.publicChatMessages[token] = [];
+      });
+    });
+  }
 
   function listenCollection(name, target) {
     const unsub = db.collection(name).onSnapshot((snap) => {
       const rows = {};
       snap.forEach((doc) => { rows[doc.id] = { id: doc.id, ...doc.data() }; });
       state[target] = rows;
+      if (target === "calls") syncPublicChatListeners();
       renderAll();
     }, (err) => {
       console.error(err);
@@ -1179,7 +1468,7 @@
 
   function startListeners() {
     unsubscribers.splice(0).forEach((fn) => fn());
-    const baseCollections = ["vehicles", "calls", "users", "customers", "integrationInbox"];
+    const baseCollections = ["vehicles", "calls", "users", "customers", "integrationInbox", "trackerProviders"];
     if (canManageFinance()) baseCollections.push("expenses", "transactions");
     if (canManageFleet() || canManageFinance()) baseCollections.push("maintenance");
     baseCollections.forEach((name) => listenCollection(name, name));
@@ -1187,6 +1476,7 @@
       state.settings = snap.exists ? snap.data() : {};
       initializeAddressTools();
       restartTrackerAutoSync();
+      startMobileGpsRealtimeListeners();
       renderAll();
     });
     unsubscribers.push(settingsUnsub);
@@ -1195,6 +1485,8 @@
   function stopListeners() {
     unsubscribers.splice(0).forEach((fn) => fn());
     if (trackerTimer) { clearInterval(trackerTimer); trackerTimer = null; }
+    clearMobileGpsRealtimeListeners();
+    clearPublicChatListeners();
   }
 
   function applyRoleVisibility() {
@@ -1308,6 +1600,10 @@
     setOptionsPreservingValue("expenseVehicle", `<option value="">Selecione</option>${vehicleOptions}`);
     setOptionsPreservingValue("finVehicle", `<option value="">Sem veículo</option>${vehicleOptions}`);
     setOptionsPreservingValue("maintenanceVehicle", `<option value="">Selecione</option>${vehicleOptions}`);
+    const providerOptions = visibleRows(state.trackerProviders)
+      .sort((a, b) => Number(a.priority || 50) - Number(b.priority || 50))
+      .map((p) => `<option value="${esc(p.id)}">${esc(p.name || p.id)} - ${esc(p.providerType || "")}</option>`).join("");
+    setOptionsPreservingValue("vehicleTrackerProvider", `<option value="">RAFA/automático</option>${providerOptions}<option value="mobile_gps">GPS celular</option><option value="manual">Manual</option>`);
     const drivers = visibleRows(state.users).filter((u) => u.active !== false && DRIVER_ROLES.includes(normalizedRole(u.role)));
     const driverOptions = drivers.map((u) => `<option value="${esc(u.id)}">${esc(u.nome || u.email)}</option>`).join("");
     setOptionsPreservingValue("callDriver", `<option value="">Selecione</option>` + drivers.map((u) => `<option value="${esc(u.id)}">${esc(u.nome || u.email)}</option>`).join(""));
@@ -1320,11 +1616,28 @@
   }
 
   function vehicleLivePoint(vehicle) {
-    return pointFrom(vehicle && (vehicle.location || vehicle.mobileLocation || vehicle.driverPhoneLocation || vehicle.phoneLocation));
+    return pointFrom(vehicle && (
+      vehicle.location ||
+      vehicle.lastLocation ||
+      vehicle.lastKnownLocation ||
+      vehicle.trackerLocation ||
+      vehicle.trackerLastLocation ||
+      vehicle.trackerPosition ||
+      vehicle.lastPosition ||
+      vehicle.mobileLocation ||
+      vehicle.driverPhoneLocation ||
+      vehicle.phoneLocation
+    ));
   }
 
   function phoneGpsForVehicle(vehicleId) {
-    if (!vehicleId) return null;
+    if (!isMobileGpsEnabled() || !vehicleId) return null;
+    if (isMobileGpsRealtime()) {
+      const rt = state.mobileGps && state.mobileGps.vehicles && state.mobileGps.vehicles[rtdbKey(vehicleId)];
+      const p = rt && pointFrom(rt.point || rt.location || rt);
+      const rawCallId = rt && (rt.rawCallId || rt.sourceCallId || rt.callOriginalId || rt.callId) || "";
+      if (p) return { point: p, call: state.calls[rawCallId] || state.calls[rt.callId] || { id: rawCallId || rt.callId || "", phoneLocationUpdatedAt: rt.capturedAt || rt.updatedAt } };
+    }
     const rows = visibleRows(state.calls).filter((call) => call.vehicleId === vehicleId && call.phoneLocationActive);
     rows.sort((a, b) => String(b.phoneLocationUpdatedAt || b.updatedAt || "").localeCompare(String(a.phoneLocationUpdatedAt || a.updatedAt || "")));
     const call = rows[0];
@@ -1333,19 +1646,69 @@
   }
 
   function vehicleWithLiveGps(vehicle) {
-    const phone = phoneGpsForVehicle(vehicle && vehicle.id);
-    if (phone && !vehicleLivePoint(vehicle)) {
+    if (!vehicle) return vehicle;
+    const phone = phoneGpsForVehicle(vehicle.id);
+    if (phone && (!vehicleLivePoint(vehicle) || String(vehicle.gpsSource || "").includes("driver_phone"))) {
       return Object.assign({}, vehicle, {
         location: phone.point,
         mobileLocation: phone.point,
-        gpsSource: "driver_phone",
-        trackerStatus: "GPS celular motorista",
+        gpsSource: isMobileGpsRealtime() ? "driver_phone_rtdb" : "driver_phone",
+        trackerStatus: isMobileGpsRealtime() ? "GPS celular motorista (Realtime DB)" : "GPS celular motorista",
         lastPhoneGpsAt: phone.call.phoneLocationUpdatedAt || phone.point.capturedAt,
         lastTrackerAt: phone.call.phoneLocationUpdatedAt || phone.point.capturedAt,
         activeCallId: phone.call.id
       });
     }
+    const lastPoint = vehicleLivePoint(vehicle);
+    if (lastPoint && !pointFrom(vehicle.location)) {
+      return Object.assign({}, vehicle, {
+        location: lastPoint,
+        trackerStatus: vehicle.trackerStatus || "Última localização conhecida",
+        lastTrackerAt: vehicle.lastTrackerAt || vehicle.trackerLastUpdateAt || vehicle.updatedAt || vehicle.lastLocationAt || ""
+      });
+    }
     return vehicle;
+  }
+
+  function vehicleIdFromMobileGpsKey(key, rt) {
+    const rawVehicleId = rt && (rt.rawVehicleId || rt.sourceVehicleId || rt.vehicleOriginalId) || "";
+    if (rawVehicleId && state.vehicles[rawVehicleId]) return rawVehicleId;
+    const payloadVehicleId = rt && rt.vehicleId || "";
+    if (payloadVehicleId && state.vehicles[payloadVehicleId]) return payloadVehicleId;
+    return Object.keys(state.vehicles || {}).find((id) => rtdbKey(id) === key) || rawVehicleId || payloadVehicleId || key;
+  }
+
+  function appendMobileGpsSideMarkers(vehicles) {
+    if (!isMobileGpsEnabled() || !isMobileGpsRealtime()) return vehicles;
+    Object.entries(state.mobileGps && state.mobileGps.vehicles || {}).forEach(([key, rt]) => {
+      if (!rt || rt.active === false) return;
+      const point = pointFrom(rt.point || rt.location || rt);
+      if (!point) return;
+      const vehicleId = vehicleIdFromMobileGpsKey(key, rt);
+      const base = vehicles[vehicleId] || state.vehicles[vehicleId] || {};
+      const basePoint = vehicleLivePoint(base);
+      const baseSource = String(base.gpsSource || base.trackerLastSource || base.trackerSource || "");
+      const hasIndependentTracker = !!basePoint && !baseSource.includes("driver_phone");
+      if (!hasIndependentTracker) return;
+      const markerId = vehicleId + "__gps_celular";
+      vehicles[markerId] = Object.assign({}, base, {
+        id: markerId,
+        realVehicleId: vehicleId,
+        placa: (base.placa || vehicleId || "Veículo") + " - celular",
+        apelido: "GPS celular do motorista",
+        location: point,
+        mobileLocation: point,
+        driverPhoneLocation: point,
+        gpsSource: "driver_phone_rtdb",
+        trackerStatus: "GPS celular motorista (Realtime DB)",
+        lastPhoneGpsAt: rt.updatedAt || rt.capturedAt || rt.point && rt.point.capturedAt || "",
+        lastTrackerAt: rt.updatedAt || rt.capturedAt || rt.point && rt.point.capturedAt || "",
+        activeCallId: rt.rawCallId || rt.callOriginalId || rt.callId || "",
+        activeDriverId: rt.driverId || "",
+        activeDriverName: rt.driverName || ""
+      });
+    });
+    return vehicles;
   }
 
   function renderDashboard() {
@@ -1456,6 +1819,7 @@
           <button class="btn" type="button" onclick="event.stopPropagation();JM.app.setCallStatus('${esc(c.id)}','em_transporte')">Transporte</button>
           <button class="btn good" type="button" onclick="event.stopPropagation();JM.app.setCallStatus('${esc(c.id)}','finalizado')">Finalizar</button>
           ${wa ? `<a class="btn" href="${esc(wa)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">WhatsApp</a>` : ""}
+          ${quickCallLinks(c, vehicle, { stopPropagation: true })}
         </div>
         <div>${routeOk ? '<span class="badge ok">Rota por ruas</span>' : '<span class="badge warn">Rota estimada</span>'} <span class="badge ${sla.className}">${esc(sla.label)}</span> ${proofStatusBadge(c)} ${String(c.priority).toLowerCase() === 'urgente' ? '<span class="badge danger">Urgente</span>' : ''}</div>
       </div>`;
@@ -1470,11 +1834,11 @@
       const age = minutesSince(gpsAt);
       const online = livePoint && age != null && age <= 10;
       const stale = livePoint && age != null && age > 10;
-      const gpsLabel = String(v.gpsSource || "").includes("driver_phone") ? "GPS celular" : "Tracker RAFA";
+      const gpsLabel = String(v.gpsSource || "").includes("driver_phone") ? (isMobileGpsRealtime() ? "GPS celular RTDB" : "GPS celular") : "Tracker RAFA";
       return `<div class="ops-card vehicle${selected}" onclick="JM.app.selectOperationalVehicle('${esc(v.id)}')">
         <div class="actions" style="justify-content:space-between"><b>${esc(v.placa || v.id)}</b><span class="badge ${online ? 'ok' : stale ? 'warn' : 'muted'}">${online ? 'online' : stale ? 'atrasado' : 'sem GPS'}</span></div>
         <div class="muted small">${esc(v.apelido || v.tipo || "Veículo")} · ${livePoint ? esc(gpsLabel) : 'sem sinal'}</div>
-        <div class="small">${livePoint ? `Lat ${esc(livePoint.lat)} · Lng ${esc(livePoint.lng)}` : 'Sem posição do tracker/celular'}</div>
+        <div class="small">${livePoint ? `Lat ${esc(livePoint.lat)} · Lng ${esc(livePoint.lng)}` : 'Sem posição do tracker'}</div>
         <div class="muted small">${age == null ? 'sem atualização' : 'última posição há ' + age + ' min'}</div>
       </div>`;
     }).join("") : `<p class="muted">Nenhum veículo cadastrado.</p>`;
@@ -1514,6 +1878,7 @@
       dispatchedBy: state.user.uid,
       timeline: arrayUnion({ at: new Date().toISOString(), by: state.profile.nome || state.user.email, text: "Veículo " + (vehicle && (vehicle.placa || vehicle.id) || vehicleId) + " despachado pela Central Operacional" })
     });
+    await syncPublicCall(callId, { vehicleId, status: "Despachado", statusKey: "despachado" });
     toast("Veículo despachado para o chamado.", "ok");
   }
 
@@ -1522,7 +1887,7 @@
     if (!call) return toast("Selecione um chamado.", "danger");
     const url = routeForCall(call, state.selectedVehicleId);
     if (!url) return toast("Chamado sem rota/link. Preencha origem/destino.", "danger");
-    openExternalUrl(url);
+    window.open(url, "_blank");
   }
 
   async function copySelectedCallRoute() {
@@ -1553,18 +1918,23 @@ Rota: ${url}`;
       const km = routeKm(c, vehicle);
       const metric = c.routeDistanceText || c.routeMetrics && c.routeMetrics.fullRoute && c.routeMetrics.fullRoute.distanceText || c.routeMetrics && c.routeMetrics.bestToOrigin && c.routeMetrics.bestToOrigin.distanceText || (km ? km.toFixed(1).replace(".", ",") + " km" : "Sem rota");
       const routeBadge = c.routePrecision === "osrm_openstreetmap" || c.routeMetrics && c.routeMetrics.fullRoute && c.routeMetrics.fullRoute.isPrecise ? `<br><span class="badge ok">Rota por ruas OSM</span>` : `<br><span class="badge warn">Fallback/estimada</span>`;
+      const tow = c.towPricing || c.deslocamentoGuincho || {};
+      const towHtml = tow.ativo ? `<br><span class="badge info">Guincho ${esc(String(tow.kmTotal || 0).replace(".", ","))} km · ${canSeeSensitiveFinance() ? money(tow.total || 0) : "valor restrito"}</span>` : "";
       const adminActions = canOwnCompany() ? `<button class="btn" onclick="JM.app.editCall('${esc(c.id)}')">Editar</button><button class="btn danger" onclick="JM.app.deleteCall('${esc(c.id)}')">Excluir</button>` : "";
       const viewProofActions = proofStatus(c) !== "pendente" ? `<button class="btn" onclick="JM.app.viewCallProofs('${esc(c.id)}')">Ver provas</button>` : "";
       const proofActions = (canOwnCompany() || hasRole(["gerente"])) && proofStatus(c) === "completo" ? `<button class="btn good" onclick="JM.app.reviewCallProofs('${esc(c.id)}')">Revisar provas</button>` : "";
       const valueHtml = canSeeSensitiveFinance() ? `<br><b>${money(c.valor || 0)}</b>` : "";
       const sla = slaInfo(c);
+      const unreadChat = publicChatUnreadCount(c);
+      const chatBadge = unreadChat ? `<br><span class="badge danger">${unreadChat} mensagem(ns) do cliente</span>` : "";
+      const quickLinks = quickCallLinks(c, vehicle);
       return `<tr>
         <td><b>${esc(c.protocolo || c.id)}</b><br><span class="muted small">${dateTime(c.createdAt)}</span></td>
         <td>${esc(c.cliente || "")}<br><span class="muted small">${esc(c.phone || "")}</span><br><span class="muted small">${esc(c.source || "Particular")}${c.insurance ? " · " + esc(c.insurance) : ""}${c.insuranceProtocol ? " · Prot. " + esc(c.insuranceProtocol) : ""}</span></td>
-        <td><span class="small">${esc(c.originLabel || c.origem && c.origem.label || "-")}</span><br><span class="muted small">→ ${esc(c.destLabel || c.destino && c.destino.label || "-")}</span><br><b>${esc(metric)}</b>${routeBadge}${url ? `<br><a class="info small" target="_blank" rel="noopener noreferrer" href="${esc(url)}">Abrir rota no Maps</a>` : ""}</td>
+        <td><span class="small">${esc(c.originLabel || c.origem && c.origem.label || "-")}</span><br><span class="muted small">→ ${esc(c.destLabel || c.destino && c.destino.label || "-")}</span><br><b>${esc(metric)}</b>${routeBadge}${towHtml}${chatBadge}${url ? `<br><a class="info small" target="_blank" rel="noopener noreferrer" href="${esc(url)}">Abrir rota no Maps</a>` : ""}</td>
         <td>${esc(vehicle.placa || "-")}<br><span class="muted small">${esc(driver.nome || driver.email || "Sem motorista")}</span></td>
         <td><span class="badge ${statusClass(c)}">${esc(operationalStatus(c))}</span>${valueHtml}<br><span class="badge ${sla.className}">${esc(sla.label)}</span><br>${proofStatusBadge(c)}</td>
-        <td class="row-actions"><button class="btn" onclick="JM.app.selectCallDossier('${esc(c.id)}')">Painel</button><button class="btn good" onclick="JM.app.setCallStatus('${esc(c.id)}','despachado')">Despachar</button><button class="btn primary" onclick="JM.app.setCallStatus('${esc(c.id)}','motorista_a_caminho')">A caminho</button><button class="btn" onclick="JM.app.setCallStatus('${esc(c.id)}','finalizado')">Finalizar</button>${viewProofActions}${proofActions}${adminActions}</td>
+        <td class="row-actions"><button class="btn" onclick="JM.app.selectCallDossier('${esc(c.id)}')">Painel</button>${quickLinks}<button class="btn good" onclick="JM.app.setCallStatus('${esc(c.id)}','despachado')">Despachar</button><button class="btn primary" onclick="JM.app.setCallStatus('${esc(c.id)}','motorista_a_caminho')">A caminho</button><button class="btn" onclick="JM.app.setCallStatus('${esc(c.id)}','finalizado')">Finalizar</button>${viewProofActions}${proofActions}${adminActions}</td>
       </tr>`;
     }).join("") + `</tbody></table>`;
   }
@@ -1582,12 +1952,13 @@ Rota: ${url}`;
     $("finalizedCallsTable").innerHTML = rows.length ? `<table><thead><tr><th>Chamado</th><th>Cliente/seguradora</th><th>Fechamento</th><th>Provas</th><th>Ações</th></tr></thead><tbody>` + rows.map((c) => {
       const driver = state.users[c.driverId] || {};
       const vehicle = state.vehicles[c.vehicleId] || {};
+      const quickLinks = quickCallLinks(c, vehicle);
       return `<tr>
         <td><b>${esc(c.protocolo || c.id)}</b><br><span class="muted small">${esc(vehicle.placa || c.vehicleId || "sem veículo")}</span></td>
         <td>${esc(c.cliente || "")}<br><span class="muted small">${esc(c.insurance || c.source || "")}${c.insuranceProtocol ? " · Prot. " + esc(c.insuranceProtocol) : ""}</span></td>
         <td><span class="badge ok">${esc(operationalStatus(c))}</span><br><span class="muted small">${dateTime(c.closedAt || c.finalizedAt || c.updatedAt)} · ${esc(driver.nome || driver.email || "motorista")}</span><br><span class="badge ${c.locked !== false ? "warn" : "info"}">${c.locked !== false ? "travado" : "reaberto"}</span></td>
         <td>${proofStatusBadge(c)}<br><span class="muted small">Cobrança: ${esc(c.billingStatus || "aberto")}</span></td>
-        <td class="row-actions"><button class="btn" onclick="JM.app.selectCallDossier('${esc(c.id)}')">Painel</button><button class="btn" onclick="JM.app.viewCallProofs('${esc(c.id)}')">Checklist/fotos</button>${canOwnCompany() || hasRole(["gerente"]) ? `<button class="btn warn" onclick="JM.app.reopenCall('${esc(c.id)}')">Reabrir</button>` : ""}</td>
+        <td class="row-actions"><button class="btn" onclick="JM.app.selectCallDossier('${esc(c.id)}')">Painel</button>${quickLinks}<button class="btn" onclick="JM.app.viewCallProofs('${esc(c.id)}')">Checklist/fotos</button>${canOwnCompany() || hasRole(["gerente"]) ? `<button class="btn warn" onclick="JM.app.reopenCall('${esc(c.id)}')">Reabrir</button>` : ""}</td>
       </tr>`;
     }).join("") + `</tbody></table>` : `<p class="muted">Nenhum chamado finalizado ainda.</p>`;
   }
@@ -1614,6 +1985,8 @@ Rota: ${url}`;
     const now = new Date().toISOString();
     setButtonBusy(submitBtn, true, "Salvando...");
     const selectedCustomer = $("callCustomerId") && $("callCustomerId").value ? state.customers[$("callCustomerId").value] || null : null;
+    const towPricing = calculateTowPricing();
+    const callValue = towPricing.ativo && towPricing.total > 0 ? towPricing.total : parseMoney($("callPrice").value);
     const baseData = {
       customerId: $("callCustomerId") ? $("callCustomerId").value : "",
       cliente: $("callClient").value.trim(),
@@ -1621,7 +1994,10 @@ Rota: ${url}`;
       customerDocument: selectedCustomer && selectedCustomer.document || "",
       phone: $("callPhone").value.trim(),
       serviceType: $("callType").value,
-      valor: parseMoney($("callPrice").value),
+      valor: callValue,
+      towPricing,
+      deslocamentoGuincho: towPricing,
+      totalGuincho: towPricing.total,
       source: $("callSource") ? $("callSource").value : "Particular",
       priority: $("callPriority") ? $("callPriority").value : "normal",
       insurance: $("callInsurance") ? $("callInsurance").value.trim() : "",
@@ -1723,6 +2099,7 @@ Rota: ${url}`;
       updates.closedByEmail = state.user.email;
       updates.locked = true;
       await db.collection("calls").doc(id).update(updates);
+      await syncPublicCall(id, updates);
       return toast("Chamado marcado como finalizado operacional, mas não ficou pronto para faturar: faltam checklist, fotos obrigatórias ou assinatura/aceite.", "warn");
     }
     if (key === "finalizado" && Number(call.valor || 0) > 0) {
@@ -1737,6 +2114,7 @@ Rota: ${url}`;
       updates.finalizedAt = updates.closedAt;
     }
     await db.collection("calls").doc(id).update(updates);
+    await syncPublicCall(id, updates);
     if (key === "finalizado" && Number(call.valor || 0) > 0 && canManageFinance()) {
       await upsertCallReceivable(id, { status: "A receber", amount: Number(call.valor || 0) });
       toast("Status atualizado e conta a receber do chamado gerada automaticamente.", "ok");
@@ -1825,6 +2203,7 @@ Rota: ${url}`;
     state.addresses.waypoints = Array.isArray(call.routeWaypoints) ? call.routeWaypoints : [];
     setValue("callRouteExternalUrl", call.routeExternalUrl || call.routeUrl || "");
     routeLinkStatus(call.routeExternalUrl ? "Link externo carregado do chamado." : "Sem link externo salvo neste chamado.", call.routeExternalUrl ? "ok" : "muted");
+    setTowPricingForm(call.towPricing || call.deslocamentoGuincho || call.guincho || { ativo: false, tipo: "leve", franquiaKm: 15, cobrarIdaVolta: true });
     setValue("callOriginLabel", state.addresses.origin.label);
     setValue("callOriginLat", originPoint && originPoint.lat);
     setValue("callOriginLng", originPoint && originPoint.lng);
@@ -1873,6 +2252,7 @@ Rota: ${url}`;
       billingStatus: Number(call.valor || 0) > 0 ? "a_faturar" : call.billingStatus || "sem_valor",
       timeline: arrayUnion({ at: new Date().toISOString(), by: personName(), text: "Gestão revisou provas do atendimento para faturamento" })
     }, { merge: true });
+    await syncPublicCall(id, { proofStatus: "revisado", billingStatus: Number(call.valor || 0) > 0 ? "a_faturar" : call.billingStatus || "sem_valor" });
     toast("Provas revisadas. Chamado liberado para faturamento.", "ok");
   }
 
@@ -1882,14 +2262,246 @@ Rota: ${url}`;
     const photos = proofPhotos(call);
     const signature = call.customerSignature || {};
     const checklist = call.proofChecklist || {};
-    const photoHtml = photos.length ? photos.map((photo) => `<div style="break-inside:avoid;border:1px solid #d1d5db;padding:10px;margin:8px 0"><b>${esc(photo.label || photo.type || "Foto")}</b><br><a href="${esc(photo.cloudinaryUrl)}" target="_blank" rel="noopener noreferrer">${esc(photo.cloudinaryUrl)}</a><br><img src="${esc(photo.cloudinaryUrl)}" style="max-width:100%;margin-top:8px"></div>`).join("") : "<p>Sem fotos.</p>";
+    const damage = call.damageAssessment || checklist.damageAssessment || {};
+    const photoBlock = (type) => {
+      const photo = proofPhotoByType(photos, type);
+      return photo ? `<div class="photo"><b>${esc(proofPhotoLabel(type))}</b><br><img src="${esc(photo.cloudinaryUrl)}"></div>` : `<div class="photo missing"><b>${esc(proofPhotoLabel(type))}</b><br>Foto não enviada.</div>`;
+    };
+    const photoHtml = photos.length ? photos.map((photo) => `<div style="break-inside:avoid;border:1px solid #d1d5db;padding:10px;margin:8px 0"><b>${esc(photo.label || proofPhotoLabel(photo.type) || "Foto")}</b><br><a href="${esc(photo.cloudinaryUrl)}" target="_blank" rel="noopener noreferrer">${esc(photo.cloudinaryUrl)}</a><br><img src="${esc(photo.cloudinaryUrl)}" style="max-width:100%;margin-top:8px"></div>`).join("") : "<p>Sem fotos.</p>";
     const sigUrl = signature.signatureUrl || signature.cloudinaryUrl || "";
-    const sigHtml = sigUrl ? `<p><b>Assinatura:</b> ${esc(signature.name || "")} ${esc(signature.document || "")}<br><b>Aceite:</b> ${esc(signature.acceptedText || "")}</p><img src="${esc(sigUrl)}" style="max-width:100%;border:1px solid #d1d5db">` : "<p>Sem assinatura.</p>";
-    const checklistHtml = REQUIRED_PROOF_STAGES.map((stage) => `<li><b>${esc(stage)}:</b> ${esc(checklist[stage] && checklist[stage].status || "pendente")}</li>`).join("");
-    const win = openReportWindow();
+    const sigHtml = sigUrl ? `<p><b>Assinatura:</b> ${esc(signature.name || "")} ${esc(signature.document || "")}<br><b>Aceite:</b> ${esc(signature.acceptedText || "")}</p><img src="${esc(sigUrl)}" style="max-width:100%;border:1px solid #d1d5db">` : signature.refused ? `<p><b>Assinatura não coletada.</b><br><b>Justificativa:</b> ${esc(signature.refusalReason || "")}<br><b>Aceite registrado:</b> ${esc(signature.acceptedText || "")}</p>` : "<p>Sem assinatura.</p>";
+    const phaseSignatures = call.phaseSignatures || {};
+    const phaseSigHtml = ["retirada", "entrega", "finalizacao"].map((phase) => {
+      const item = phaseSignatures[phase] || {};
+      const url = item.signatureUrl || item.cloudinaryUrl || "";
+      if (url) return `<div class="photo"><b>${esc(PROOF_STAGE_LABELS[phase] || phase)}</b><p>${esc(item.name || "")} ${esc(item.document || "")}<br>${esc(item.acceptedText || "")}</p><img src="${esc(url)}"></div>`;
+      if (item.refused) return `<div class="photo missing"><b>${esc(PROOF_STAGE_LABELS[phase] || phase)}</b><p>Sem assinatura. Justificativa: ${esc(item.refusalReason || "")}</p></div>`;
+      return `<div class="photo missing"><b>${esc(PROOF_STAGE_LABELS[phase] || phase)}</b><p>Assinatura/justificativa pendente.</p></div>`;
+    }).join("");
+    const checklistHtml = REQUIRED_PROOF_STAGES.map((stage) => {
+      const row = checklist[stage] || {};
+      return `<li><b>${esc(PROOF_STAGE_LABELS[stage] || stage)}:</b> ${esc(row.status || "pendente")}${row.justificativa ? `<br><span class="muted">Justificativa: ${esc(row.justificativa)}</span>` : ""}</li>`;
+    }).join("");
+    const stageEvidenceHtml = `
+      <section><h2>Antes do carregamento</h2><div class="grid">${["front", "rear", "right", "left", "dashboard"].map(photoBlock).join("")}</div><p>${esc(checklist.retirada && checklist.retirada.justificativa || "")}</p></section>
+      <section><h2>Carregado no caminhão</h2><div class="grid">${photoBlock("load_after")}</div><p>${esc(checklist.carregamento && checklist.carregamento.justificativa || "")}</p></section>
+      <section><h2>Depois da descarga / entrega</h2><div class="grid">${["delivery_front", "delivery_rear", "delivery_right", "delivery_left", "delivery_dashboard", "final"].map(photoBlock).join("")}</div><p>${esc(checklist.entrega && checklist.entrega.justificativa || "")}</p></section>
+    `;
+    const damageParts = Array.isArray(damage.parts) ? damage.parts.map((part) => part.label || part.key).filter(Boolean).join(", ") : "";
+    const damageHtml = `<h2>Avarias marcadas</h2><p><b>Tipo:</b> ${esc(damage.vehicleType || "-")}<br><b>Partes:</b> ${esc(damageParts || "-")}<br><b>Descrição:</b><br>${esc(damage.details || "-")}</p>`;
+    const company = cfg.empresa || {};
+    const headerHtml = `<header class="report-header"><div><h1>Laudo técnico de atendimento</h1><p class="muted">${esc(company.nome || "JM Guinchos")} · ${esc(company.cidadeBase || "")} · ${esc(company.telefoneOperacional || "")}</p></div><div class="report-stamp"><b>${esc(call.protocolo || id)}</b><span>${dateTime(new Date().toISOString())}</span></div></header>`;
+    const win = window.open("", "_blank");
     if (!win) return toast("O navegador bloqueou a janela de provas.", "danger");
-    win.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Provas ${esc(call.protocolo || id)}</title><style>body{font-family:Arial,sans-serif;padding:18px;color:#111827} h1{margin-bottom:4px} .muted{color:#64748b}</style></head><body><h1>Provas do atendimento ${esc(call.protocolo || id)}</h1><p class="muted">${esc(call.cliente || "")} · ${esc(call.insurance || "")} · ${esc(call.customerPlate || "")}</p><h2>Checklist</h2><ul>${checklistHtml}</ul><p>${esc(checklist.notes || "")}</p><h2>Assinatura</h2>${sigHtml}<h2>Fotos</h2>${photoHtml}</body></html>`);
+    win.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Laudo ${esc(call.protocolo || id)}</title><style>body{font-family:Arial,sans-serif;padding:18px;color:#111827}.report-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;border-bottom:2px solid #0f766e;padding-bottom:12px;margin-bottom:14px}.report-header h1{margin:0 0 4px;font-size:24px}.report-stamp{text-align:right;border:1px solid #d1d5db;border-radius:8px;padding:10px;min-width:160px}.report-stamp span{display:block;color:#64748b;font-size:12px;margin-top:4px}h2{font-size:15px;margin:18px 0 8px;color:#0f766e}.muted{color:#64748b}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.photo{break-inside:avoid;border:1px solid #d1d5db;border-radius:8px;padding:8px;margin:6px 0;background:#fff}.photo img{width:100%;height:118px;object-fit:cover;object-position:center;margin-top:6px;border-radius:6px}.missing{color:#991b1b;background:#fef2f2}.report-context{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.report-context div{border:1px solid #e5e7eb;border-radius:8px;padding:8px}@media print{button{display:none}.photo{page-break-inside:avoid}.grid{grid-template-columns:repeat(4,minmax(0,1fr))}.photo img{height:92px}body{padding:8mm}.report-header{position:running(reportHeader)}}@page{margin:10mm}</style></head><body>${headerHtml}<div class="report-context"><div><b>Cliente</b><br>${esc(call.cliente || "-")}</div><div><b>Seguradora</b><br>${esc(call.insurance || call.source || "-")}</div><div><b>Placa</b><br>${esc(call.customerPlate || "-")}</div></div><h2>Checklist por etapa</h2><ul>${checklistHtml}</ul><p>${esc(checklist.notes || "")}</p>${damageHtml}${stageEvidenceHtml}<h2>Assinatura ou justificativa por fase</h2><div class="grid">${phaseSigHtml}</div><h2>Assinatura geral de compatibilidade</h2>${sigHtml}<h2>Fotos gerais</h2>${photoHtml}<p class="muted">${SYSTEM_SIGNATURE}</p></body></html>`);
     win.document.close();
+  }
+
+  function publicStatusLabel(call) {
+    const key = statusKey(call);
+    const labels = {
+      aguardando_despacho: "Atendimento recebido",
+      despachado: "Guincho em preparação",
+      motorista_a_caminho: "Motorista a caminho",
+      motorista_no_local: "Motorista chegou ao local",
+      veiculo_carregado: "Veículo carregado",
+      em_transporte: "Veículo em remoção/transporte",
+      entregue: "Veículo entregue",
+      finalizado: "Atendimento finalizado",
+      cancelado: "Atendimento cancelado"
+    };
+    return labels[key] || "Atendimento recebido";
+  }
+
+  function publicToken() {
+    const bytes = new Uint8Array(18);
+    if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(bytes);
+    else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+    return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  function publicClientUrl(token) {
+    return location.origin + location.pathname.replace(/jm\.html.*$/i, "cliente-chamado.html") + "?t=" + encodeURIComponent(token);
+  }
+
+  function publicReportUrl(token) {
+    return location.origin + location.pathname.replace(/jm\.html.*$/i, "relatorio.html") + "?t=" + encodeURIComponent(token);
+  }
+
+  function publicTimeline(call) {
+    const rows = Array.isArray(call.timeline) ? call.timeline : [];
+    return rows.slice(-20).map((event) => ({
+      at: event.at || event.dt || "",
+      status: event.status || publicStatusLabel(call),
+      text: event.publicText || event.text || event.acao || "",
+      by: event.by || "JM Guinchos"
+    }));
+  }
+
+  function publicProofs(call) {
+    if (!call.publicProofsEnabled) return [];
+    return proofPhotos(call).filter((photo) => {
+      const visibility = String(photo.visibility || "").toLowerCase();
+      return photo.approvedForClient === true || ["client", "public"].includes(visibility) || call.publicProofsEnabled === true;
+    }).map((photo) => ({
+      label: photo.label || photo.type || "Foto",
+      url: photo.cloudinaryUrl,
+      type: photo.type || "",
+      uploadedAt: photo.uploadedAt || ""
+    }));
+  }
+
+  function publicCallPayload(call) {
+    const driver = state.users[call.driverId] || {};
+    const vehicle = state.vehicles[call.vehicleId] || {};
+    const token = call.publicToken || publicToken();
+    return {
+      publicToken: token,
+      callId: call.id,
+      companyName: "JM Guinchos",
+      statusPublic: publicStatusLabel(call),
+      statusKey: statusKey(call),
+      serviceType: call.serviceType || call.tipo || "Guincho",
+      clientNameMasked: call.cliente || call.customerName || "Cliente",
+      customerPhone: call.publicChatEnabled ? (call.phone || "") : "",
+      vehiclePlateMasked: call.customerPlate || "",
+      customerVehicle: call.customerVehicle || "",
+      originLabel: call.publicRouteEnabled !== false ? (call.originLabel || call.origem && call.origem.label || "") : "",
+      destinationLabel: call.publicRouteEnabled !== false ? (call.destLabel || call.destino && call.destino.label || "") : "",
+      driverName: call.publicDriverEnabled !== false ? (driver.nome || driver.email || "") : "",
+      fleetVehicle: call.publicDriverEnabled !== false ? (vehicle.placa || vehicle.apelido || "") : "",
+      timelinePublic: publicTimeline(call),
+      proofsPublic: publicProofs(call),
+      damageAssessmentPublic: call.publicProofsEnabled ? (call.damageAssessment || call.proofChecklist && call.proofChecklist.damageAssessment || null) : null,
+      customerSignaturePublic: call.publicProofsEnabled ? (call.customerSignature || null) : null,
+      phaseSignaturesPublic: call.publicProofsEnabled ? (call.phaseSignatures || {}) : {},
+      reportEnabled: call.publicReportEnabled !== false,
+      chatEnabled: call.publicChatEnabled !== false,
+      paymentNegotiationEnabled: call.publicPaymentNegotiationEnabled === true,
+      paymentStatus: call.publicPaymentNegotiationEnabled ? (call.billingStatus || "") : "",
+      amountDue: call.publicPaymentNegotiationEnabled ? Number(call.financialSummary && call.financialSummary.balanceAmount || call.valor || 0) : 0,
+      whatsapp: (state.settings.company && state.settings.company.telefoneOperacional) || cfg.empresa && cfg.empresa.telefoneOperacional || "",
+      updatedAt: new Date().toISOString(),
+      revoked: call.publicRevoked === true,
+      expiresAt: call.publicTokenExpiresAt || ""
+    };
+  }
+
+  async function syncPublicCall(callId, extra) {
+    const call = Object.assign({}, state.calls[callId] || {});
+    Object.entries(extra || {}).forEach(([key, value]) => {
+      if (key === "timeline" && !Array.isArray(value)) return;
+      call[key] = value;
+    });
+    if (!call || !call.publicToken || call.publicRevoked) return;
+    await db.collection("publicCalls").doc(call.publicToken).set(publicCallPayload(call), { merge: true });
+  }
+
+  async function generatePublicLink(id) {
+    if (!canOperateCalls()) return toast("Sem permissão para gerar link público.", "danger");
+    const call = state.calls[id];
+    if (!call) return toast("Chamado não encontrado.", "danger");
+    const token = call.publicToken || publicToken();
+    const updates = {
+      publicTrackingEnabled: true,
+      publicToken: token,
+      publicTokenCreatedAt: call.publicTokenCreatedAt || new Date().toISOString(),
+      publicRevoked: false,
+      publicChatEnabled: call.publicChatEnabled !== false,
+      publicReportEnabled: call.publicReportEnabled !== false,
+      publicRouteEnabled: call.publicRouteEnabled !== false,
+      publicDriverEnabled: call.publicDriverEnabled !== false,
+      updatedAt: new Date().toISOString()
+    };
+    await db.collection("calls").doc(id).set(updates, { merge: true });
+    await db.collection("publicCalls").doc(token).set(publicCallPayload(Object.assign({}, call, updates)), { merge: true });
+    toast("Link público do cliente gerado.", "ok");
+    try { await navigator.clipboard.writeText(publicClientUrl(token)); } catch (_) {}
+  }
+
+  async function copyPublicLink(id) {
+    const call = state.calls[id];
+    if (!call || !call.publicToken || call.publicRevoked) return toast("Gere o link público antes de copiar.", "danger");
+    const url = publicClientUrl(call.publicToken);
+    try {
+      await navigator.clipboard.writeText(url);
+      toast("Link do cliente copiado.", "ok");
+    } catch (_) {
+      window.prompt("Copie o link do cliente:", url);
+    }
+  }
+
+  function openPublicView(id) {
+    const call = state.calls[id];
+    if (!call || !call.publicToken || call.publicRevoked) return toast("Gere o link público antes de abrir.", "danger");
+    window.open(publicClientUrl(call.publicToken), "_blank");
+  }
+
+  async function revokePublicLink(id) {
+    if (!canOwnCompany() && !hasRole(["gerente"])) return toast("Somente gestor/dono ou gerente pode revogar link público.", "danger");
+    const call = state.calls[id];
+    if (!call || !call.publicToken) return toast("Chamado sem link público.", "danger");
+    await db.collection("calls").doc(id).set({ publicRevoked: true, publicTrackingEnabled: false, updatedAt: new Date().toISOString() }, { merge: true });
+    await db.collection("publicCalls").doc(call.publicToken).set({ revoked: true, updatedAt: new Date().toISOString() }, { merge: true });
+    toast("Link público revogado.", "ok");
+  }
+
+  async function togglePublicProofs(id) {
+    if (!canOwnCompany() && !hasRole(["gerente"])) return toast("Somente gestor/dono ou gerente pode liberar provas ao cliente.", "danger");
+    const call = state.calls[id];
+    if (!call) return;
+    const enabled = !call.publicProofsEnabled;
+    await db.collection("calls").doc(id).set({ publicProofsEnabled: enabled, updatedAt: new Date().toISOString() }, { merge: true });
+    await syncPublicCall(id, { publicProofsEnabled: enabled });
+    toast(enabled ? "Provas liberadas para o cliente." : "Provas bloqueadas para o cliente.", enabled ? "ok" : "warn");
+  }
+
+  async function togglePublicPayment(id) {
+    if (!canManageFinance()) return toast("Somente gestor/dono ou financeiro pode liberar negociação de pagamento.", "danger");
+    const call = state.calls[id];
+    if (!call) return;
+    const enabled = !call.publicPaymentNegotiationEnabled;
+    await db.collection("calls").doc(id).set({ publicPaymentNegotiationEnabled: enabled, updatedAt: new Date().toISOString() }, { merge: true });
+    await syncPublicCall(id, { publicPaymentNegotiationEnabled: enabled });
+    toast(enabled ? "Negociação de pagamento habilitada no link público." : "Negociação de pagamento desabilitada.", enabled ? "ok" : "warn");
+  }
+
+  function openReport(id) {
+    const call = state.calls[id];
+    if (call && call.publicToken && !call.publicRevoked) return window.open(publicReportUrl(call.publicToken), "_blank");
+    return viewCallProofs(id);
+  }
+
+  async function replyPublicChat(id) {
+    if (!canOperateCalls()) return toast("Sem permissão para responder cliente.", "danger");
+    const call = state.calls[id];
+    if (!call || !call.publicToken || call.publicRevoked) return toast("Gere um link público ativo antes de abrir o chat.", "danger");
+    const field = $("publicChatReply_" + id);
+    const text = field && field.value || window.prompt("Mensagem para o cliente:");
+    if (!text || !text.trim()) return;
+    await db.collection("publicCalls").doc(call.publicToken).collection("messages").add({
+      senderType: "admin",
+      senderName: personName(),
+      message: text.trim(),
+      createdAt: new Date().toISOString(),
+      callId: id
+    });
+    if (field) field.value = "";
+    await markPublicChatRead(id, false);
+    toast("Mensagem enviada ao cliente.", "ok");
+  }
+
+  async function markPublicChatRead(id, showToast) {
+    const call = state.calls[id];
+    if (!call || !call.publicToken) return;
+    const rows = (state.publicChatMessages[call.publicToken] || []).filter((msg) => msg.senderType === "client" && !msg.readAt);
+    const now = new Date().toISOString();
+    await Promise.all(rows.map((msg) => db.collection("publicCalls").doc(call.publicToken).collection("messages").doc(msg.id).set({
+      readAt: now,
+      readBy: state.user.uid,
+      readByName: personName()
+    }, { merge: true })));
+    if (showToast !== false) toast("Mensagens do cliente marcadas como lidas.", "ok");
   }
 
   function renderCallDossier() {
@@ -1912,10 +2524,67 @@ Rota: ${url}`;
     const saidas = txs.filter((t) => t.type === "saida").reduce((s, t) => s + Number(t.amount || 0), 0);
     const checklistHtml = REQUIRED_PROOF_STAGES.map((stage) => {
       const row = checklist[stage] || {};
-      return `<div class="dossier-row"><b>${esc(stage)}</b><span class="badge ${row.status && row.status !== "pendente" ? "ok" : "warn"}">${esc(row.status || "pendente")}</span></div>`;
+      return `<div class="dossier-row"><b>${esc(PROOF_STAGE_LABELS[stage] || stage)}</b><span class="badge ${row.status && row.status !== "pendente" ? "ok" : "warn"}">${esc(row.status || "pendente")}</span>${row.justificativa ? `<small>${esc(row.justificativa)}</small>` : ""}</div>`;
     }).join("");
-    const photosHtml = photos.length ? photos.map((p) => `<a class="proof-thumb" target="_blank" rel="noopener noreferrer" href="${esc(p.cloudinaryUrl)}"><img src="${esc(p.cloudinaryUrl)}" alt="${esc(p.label || p.type || "foto")}"><span>${esc(p.label || p.type || "foto")}</span></a>`).join("") : `<p class="muted small">Sem fotos salvas.</p>`;
+    const damage = call.damageAssessment || checklist.damageAssessment || {};
+    const damageParts = Array.isArray(damage.parts) ? damage.parts.map((part) => part.label || part.key).filter(Boolean).join(", ") : "";
+    const damageHtml = damageParts || damage.details ? `<div class="dossier-row"><b>Avarias no desenho</b><small>${esc(damage.vehicleType || "veículo")}</small><span>${esc(damageParts || "sem partes marcadas")}</span>${damage.details ? `<small>${esc(damage.details)}</small>` : ""}</div>` : `<p class="muted small">Nenhuma avaria marcada no desenho.</p>`;
+    const photosHtml = photos.length ? photos.map((p) => `<a class="proof-thumb" target="_blank" rel="noopener noreferrer" href="${esc(p.cloudinaryUrl)}"><img src="${esc(p.cloudinaryUrl)}" alt="${esc(p.label || proofPhotoLabel(p.type) || "foto")}"><span>${esc(p.label || proofPhotoLabel(p.type) || "foto")}</span></a>`).join("") : `<p class="muted small">Sem fotos salvas.</p>`;
+    const beforeAfterHtml = `
+      <div class="proof-stage-evidence"><h4>Antes do carregamento</h4><div class="proof-thumbs">${["front", "rear", "right", "left", "dashboard"].map((type) => {
+        const p = proofPhotoByType(photos, type);
+        return p ? `<a class="proof-thumb" target="_blank" rel="noopener noreferrer" href="${esc(p.cloudinaryUrl)}"><img src="${esc(p.cloudinaryUrl)}" alt="${esc(proofPhotoLabel(type))}"><span>${esc(proofPhotoLabel(type))}</span></a>` : `<div class="proof-thumb missing"><span>${esc(proofPhotoLabel(type))}: pendente</span></div>`;
+      }).join("")}</div></div>
+      <div class="proof-stage-evidence"><h4>Carregado no caminhão</h4><div class="proof-thumbs">${["load_after"].map((type) => {
+        const p = proofPhotoByType(photos, type);
+        return p ? `<a class="proof-thumb" target="_blank" rel="noopener noreferrer" href="${esc(p.cloudinaryUrl)}"><img src="${esc(p.cloudinaryUrl)}" alt="${esc(proofPhotoLabel(type))}"><span>${esc(proofPhotoLabel(type))}</span></a>` : `<div class="proof-thumb missing"><span>${esc(proofPhotoLabel(type))}: pendente</span></div>`;
+      }).join("")}</div></div>
+      <div class="proof-stage-evidence"><h4>Entrega / depois de descarregar</h4><div class="proof-thumbs">${["delivery_front", "delivery_rear", "delivery_right", "delivery_left", "delivery_dashboard", "final"].map((type) => {
+        const p = proofPhotoByType(photos, type);
+        return p ? `<a class="proof-thumb" target="_blank" rel="noopener noreferrer" href="${esc(p.cloudinaryUrl)}"><img src="${esc(p.cloudinaryUrl)}" alt="${esc(proofPhotoLabel(type))}"><span>${esc(proofPhotoLabel(type))}</span></a>` : `<div class="proof-thumb missing"><span>${esc(proofPhotoLabel(type))}: pendente</span></div>`;
+      }).join("")}</div></div>`;
     const timeline = (call.timeline || []).slice().reverse().slice(0, 8).map((t) => `<div class="timeline-item"><b>${esc(t.by || t.user || "Sistema")}</b><br>${esc(t.text || t.acao || "")}<br><small>${dateTime(t.at || t.dt)}</small></div>`).join("") || `<p class="muted small">Sem auditoria operacional.</p>`;
+    const tow = call.towPricing || call.deslocamentoGuincho || {};
+    const towText = tow.ativo
+      ? `<p class="small"><b>${esc(tow.tipoLabel || tow.tipo || "Guincho")}</b><br>KM ida: <b>${esc(String(tow.kmTotal || 0).replace(".", ","))}</b> · Franquia: <b>${esc(String(tow.franquiaKm || 0).replace(".", ","))}</b><br>Saída: <b>${money(tow.valorSaida || 0)}</b> · KM: <b>${money(tow.valorKmAdicional || 0)}</b> · Desc.: <b>${esc(String(tow.descontoPct || 0).replace(".", ","))}%</b><br>Total guincho: <b>${money(tow.total || 0)}</b>${tow.obs ? "<br>Obs.: " + esc(tow.obs) : ""}</p>`
+      : `<p class="muted small">Sem precificação de guincho vinculada.</p>`;
+    const publicActive = call.publicToken && !call.publicRevoked;
+    const publicLink = publicActive ? publicClientUrl(call.publicToken) : "";
+    const chatRows = publicActive ? (state.publicChatMessages[call.publicToken] || []) : [];
+    const unreadChat = publicChatUnreadCount(call);
+    const chatPreview = publicActive
+      ? `<div class="public-chat-admin">
+          <div class="actions" style="justify-content:space-between">
+            <b>Chat com o cliente</b>
+            <span class="badge ${unreadChat ? "danger" : "ok"}">${unreadChat ? unreadChat + " não lida(s)" : "em dia"}</span>
+          </div>
+          <div class="chat-messages compact">${chatRows.length ? chatRows.slice(-8).map((msg) => `<div class="chat-message ${esc(msg.senderType || "client")}"><b>${esc(msg.senderName || (msg.senderType === "admin" ? "JM Guinchos" : "Cliente"))}</b><br>${esc(msg.message || "")}<br><small>${dateTime(msg.createdAt)}${msg.senderType === "client" && !msg.readAt ? " · não lida" : ""}</small></div>`).join("") : `<p class="muted small">Nenhuma mensagem do cliente ainda.</p>`}</div>
+          <textarea id="publicChatReply_${esc(call.id)}" placeholder="Responder cliente pelo link público"></textarea>
+          <div class="actions">
+            <button class="btn primary" onclick="JM.app.replyPublicChat('${esc(call.id)}')">Enviar resposta</button>
+            <button class="btn" onclick="JM.app.markPublicChatRead('${esc(call.id)}')">Marcar como lidas</button>
+          </div>
+        </div>`
+      : `<p class="muted small">Gere o link público para habilitar chat e alertas de mensagens.</p>`;
+    const publicHtml = `<div class="public-link-box">
+      <b>Link público do cliente</b><br>
+      <span class="badge ${publicActive ? "ok" : "muted"}">${publicActive ? "Ativo" : call.publicRevoked ? "Revogado" : "Não gerado"}</span>
+      ${unreadChat ? `<span class="badge danger">${unreadChat} mensagem(ns) do cliente</span>` : ""}
+      ${call.publicProofsEnabled ? '<span class="badge ok">Provas liberadas</span>' : '<span class="badge warn">Provas internas</span>'}
+      ${call.publicPaymentNegotiationEnabled ? '<span class="badge info">Pagamento habilitado</span>' : ''}
+      <p class="small">${publicLink ? esc(publicLink) : "Gere um token para enviar ao cliente final sem expor o painel interno."}</p>
+      <div class="actions">
+        <button class="btn primary" onclick="JM.app.generatePublicLink('${esc(call.id)}')">Gerar link</button>
+        <button class="btn" onclick="JM.app.copyPublicLink('${esc(call.id)}')">Copiar link</button>
+        <button class="btn" onclick="JM.app.openPublicView('${esc(call.id)}')">Abrir visão</button>
+        <button class="btn" onclick="JM.app.togglePublicProofs('${esc(call.id)}')">${call.publicProofsEnabled ? "Bloquear provas" : "Liberar provas"}</button>
+        <button class="btn" onclick="JM.app.replyPublicChat('${esc(call.id)}')">Abrir chat</button>
+        <button class="btn" onclick="JM.app.openReport('${esc(call.id)}')">Relatório/PDF</button>
+        ${canManageFinance() ? `<button class="btn" onclick="JM.app.togglePublicPayment('${esc(call.id)}')">${call.publicPaymentNegotiationEnabled ? "Desabilitar pagamento" : "Habilitar negociação"}</button>` : ""}
+        ${publicActive ? `<button class="btn danger" onclick="JM.app.revokePublicLink('${esc(call.id)}')">Revogar link</button>` : ""}
+      </div>
+      ${chatPreview}
+    </div>`;
     box.innerHTML = `
       <div class="dossier-head">
         <div><h3>${esc(call.protocolo || call.id)} · ${esc(call.cliente || "")}</h3><p class="muted small">${esc(call.insurance || call.source || "Particular")} ${call.insuranceProtocol ? "· Prot. " + esc(call.insuranceProtocol) : ""} · ${esc(call.customerPlate || "")}</p></div>
@@ -1923,12 +2592,24 @@ Rota: ${url}`;
       </div>
       <div class="dossier-grid">
         <section><h3>Operação</h3><p class="small"><b>Origem:</b> ${esc(call.originLabel || call.origem && call.origem.label || "-")}<br><b>Destino:</b> ${esc(call.destLabel || call.destino && call.destino.label || "-")}<br><b>Veículo:</b> ${esc(vehicle.placa || call.vehicleId || "-")}<br><b>Motorista:</b> ${esc(driver.nome || driver.email || "-")}</p></section>
+        <section class="wide"><h3>Rota interna do chamado</h3><div id="callDossierRouteMap" class="map mini-map"></div></section>
+        <section><h3>Precificação do guincho</h3>${towText}</section>
         <section><h3>Checklist</h3>${checklistHtml}<p class="muted small">${esc(checklist.notes || "")}</p></section>
+        <section><h3>Mapa de avarias</h3>${damageHtml}</section>
+        <section class="wide"><h3>Antes e depois por etapa</h3>${beforeAfterHtml}</section>
         <section><h3>Fotos</h3><div class="proof-thumbs">${photosHtml}</div></section>
-        <section><h3>Assinatura</h3>${sigUrl ? `<p class="small"><b>${esc(sig.name || "Cliente")}</b><br>${esc(sig.document || "")}<br>${dateTime(sig.signedAt)}</p><img class="signature-preview" src="${esc(sigUrl)}" alt="Assinatura">` : `<p class="muted small">Sem assinatura.</p>`}</section>
+        <section><h3>Assinatura</h3>${sigUrl ? `<p class="small"><b>${esc(sig.name || "Cliente")}</b><br>${esc(sig.document || "")}<br>${dateTime(sig.signedAt)}</p><img class="signature-preview" src="${esc(sigUrl)}" alt="Assinatura">` : sig.refused ? `<p class="small"><b>Sem assinatura</b><br>Justificativa: ${esc(sig.refusalReason || "")}</p>` : `<p class="muted small">Sem assinatura.</p>`}</section>
         <section><h3>Financeiro</h3><p class="small">Cobrança: <b>${esc(call.billingStatus || "aberto")}</b><br>Valor previsto: <b>${canSeeSensitiveFinance() ? money(call.valor || 0) : "Restrito"}</b><br>Resultado lançado: <b>${canSeeSensitiveFinance() ? money(entradas - saidas) : "Restrito"}</b></p></section>
         <section><h3>Linha do tempo</h3>${timeline}</section>
+        <section><h3>Cliente final</h3>${publicHtml}</section>
       </div>`;
+    setTimeout(() => {
+      try {
+        window.JM.mapa.renderFleetMap("callDossierRouteMap", state.vehicles, { [call.id]: call }, { selectedCallId: call.id, selectedVehicleId: call.vehicleId, filter: "todos" });
+      } catch (err) {
+        console.warn("Falha ao renderizar rota interna do chamado", err);
+      }
+    }, 80);
   }
 
   function renderCustomers() {
@@ -2138,6 +2819,11 @@ Rota: ${url}`;
       tipo: $("vehicleType").value.trim(),
       trackerId: $("vehicleTrackerId") ? $("vehicleTrackerId").value.trim() : placa,
       trackerDeviceId: $("vehicleTrackerId") ? $("vehicleTrackerId").value.trim() : "",
+      trackerProviderId: $("vehicleTrackerProvider") ? $("vehicleTrackerProvider").value : "",
+      trackerExternalId: $("vehicleTrackerExternalId") ? $("vehicleTrackerExternalId").value.trim() : "",
+      trackerImei: $("vehicleTrackerImei") ? $("vehicleTrackerImei").value.trim() : "",
+      trackerPlate: $("vehicleTrackerPlate") ? plateKey($("vehicleTrackerPlate").value) : "",
+      trackerEnabled: $("vehicleTrackerEnabled") ? $("vehicleTrackerEnabled").value !== "false" : true,
       status: $("vehicleStatus").value,
       updatedAt: new Date().toISOString(),
       updatedBy: state.user.uid
@@ -2426,7 +3112,33 @@ Rota: ${url}`;
       if ($("expenseApproval")) $("expenseApproval").innerHTML = "";
       return;
     }
-    const rows = visibleRows(state.transactions).sort((a, b) => String(b.createdAt || b.date || "").localeCompare(String(a.createdAt || a.date || "")));
+    const filter = {
+      text: statusLower($("financeSearch") && $("financeSearch").value || ""),
+      type: $("financeTypeFilter") && $("financeTypeFilter").value || "",
+      status: statusLower($("financeStatusFilter") && $("financeStatusFilter").value || ""),
+      start: $("financeStartDate") && $("financeStartDate").value || "",
+      end: $("financeEndDate") && $("financeEndDate").value || ""
+    };
+    const allRows = visibleRows(state.transactions).sort((a, b) => String(b.createdAt || b.date || "").localeCompare(String(a.createdAt || a.date || "")));
+    const rows = allRows.filter((t) => {
+      if (filter.type && t.type !== filter.type) return false;
+      if (filter.status && !statusLower(t.status).includes(filter.status)) return false;
+      const date = String(t.date || t.dueDate || t.createdAt || "").slice(0, 10);
+      if (filter.start && date && date < filter.start) return false;
+      if (filter.end && date && date > filter.end) return false;
+      if (filter.text) {
+        const call = state.calls[t.callId] || {};
+        const vehicle = state.vehicles[t.vehicleId] || {};
+        const driver = state.users[t.driverId] || {};
+        const haystack = statusLower([
+          t.description, t.category, t.status, t.type, t.protocol, t.invoiceNumber,
+          t.billingParty, call.protocolo, call.cliente, call.insurance,
+          vehicle.placa, vehicle.apelido, driver.nome, driver.email
+        ].filter(Boolean).join(" "));
+        if (!haystack.includes(filter.text)) return false;
+      }
+      return true;
+    });
     const entradas = rows.filter((t) => t.type === "entrada" && t.module !== "payments_shadow").reduce((s, t) => s + Number(t.amount || 0), 0);
     const saidas = rows.filter((t) => t.type === "saida").reduce((s, t) => s + Number(t.amount || 0), 0);
     const toBill = visibleRows(state.calls).filter((c) => Number(c.valor || 0) > 0 && (isFinalStatus(c.statusKey || c.status) || /faturar|receber/i.test(String(c.billingStatus || ""))) && !c.receivableTransactionId);
@@ -2434,7 +3146,8 @@ Rota: ${url}`;
       const vehicle = state.vehicles[c.vehicleId] || {};
       return `<tr><td>${esc(c.protocolo || c.id)}</td><td>${esc(callDisplayName(c))}</td><td>${esc(vehicle.placa || c.vehicleId || "-")}</td><td><b>${money(c.valor || 0)}</b></td><td><button class="btn good" onclick="JM.app.generateCallReceivable('${esc(c.id)}')">Gerar cobrança</button></td></tr>`;
     }).join("")}</tbody></table></div></div>` : "";
-    $("financeTable").innerHTML = `<div class="finance-summary"><span>Receitas <b>${money(entradas)}</b></span><span>Despesas <b>${money(saidas)}</b></span><span>Lucro bruto <b>${money(entradas - saidas)}</b></span></div>${billingQueue}<table><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Vínculos</th><th>Status</th><th>Valor</th><th>Ações</th></tr></thead><tbody>` +
+    const filterInfo = rows.length === allRows.length ? "" : `<span>Filtrados <b>${rows.length}/${allRows.length}</b></span>`;
+    $("financeTable").innerHTML = `<div class="finance-summary"><span>Receitas <b>${money(entradas)}</b></span><span>Despesas <b>${money(saidas)}</b></span><span>Lucro bruto <b>${money(entradas - saidas)}</b></span><span>Registros <b>${rows.length}</b></span>${filterInfo}</div>${billingQueue}<table><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Vínculos</th><th>Status</th><th>Valor</th><th>Ações</th></tr></thead><tbody>` +
       rows.map((t) => {
         const call = state.calls[t.callId] || {};
         const vehicle = state.vehicles[t.vehicleId] || {};
@@ -2676,6 +3389,22 @@ Rota: ${url}`;
     const active = document.querySelector(".view.active");
     window.JM_MAP_SETTINGS = activeMapSettings();
     const vehicles = Object.fromEntries(visibleRows(state.vehicles).map(vehicleWithLiveGps).map((v) => [v.id, v]));
+    if (window.JM.tracker && typeof window.JM.tracker.getNormalizedFleetPositions === "function") {
+      const normalized = window.JM.tracker.getNormalizedFleetPositions(vehicles, state.mobileGps && state.mobileGps.vehicles || {});
+      normalized.forEach((pos) => {
+        if (!pos || !pos.vehicleId || !vehicles[pos.vehicleId]) return;
+        const current = vehicles[pos.vehicleId];
+        vehicles[pos.vehicleId] = Object.assign({}, current, {
+          location: { lat: pos.lat, lng: pos.lng },
+          gpsSource: pos.source || current.gpsSource || "tracker",
+          trackerStatus: pos.providerType ? ("Tracker " + pos.providerType) : current.trackerStatus,
+          trackerProviderId: pos.providerId || current.trackerProviderId || "",
+          trackerProviderType: pos.providerType || current.trackerProviderType || "",
+          lastTrackerAt: pos.updatedAt || current.lastTrackerAt || current.updatedAt
+        });
+      });
+    }
+    appendMobileGpsSideMarkers(vehicles);
     const calls = Object.fromEntries(visibleRows(state.calls).map((c) => [c.id, c]));
     if (!active) return;
     if (active.id === "view-dashboard") window.JM.mapa.renderFleetMap("dashboardMap", vehicles, calls);
@@ -2697,6 +3426,13 @@ Rota: ${url}`;
     if ($("btnSmartRoute")) $("btnSmartRoute").onclick = calculateSmartRoute;
     if ($("btnOpenGoogleRoute")) $("btnOpenGoogleRoute").onclick = openGoogleRouteFromForm;
     if ($("btnReadRouteLink")) $("btnReadRouteLink").onclick = readSharedRouteLink;
+    if ($("btnTowUseRouteKm")) $("btnTowUseRouteKm").onclick = applyRouteKmToTowPricing;
+    if ($("btnTowApplyToPrice")) $("btnTowApplyToPrice").onclick = applyTowTotalToPrice;
+    ["callTowActive", "callTowKm", "callTowFranchiseKm", "callTowBaseOut", "callTowKmValue", "callTowDiscountPct", "callTowRoundTrip", "callTowSubtractFranchise", "callTowNotes"].forEach((id) => {
+      if ($(id)) $(id).oninput = calculateTowPricing;
+      if ($(id)) $(id).onchange = calculateTowPricing;
+    });
+    if ($("callTowType")) $("callTowType").onchange = updateTowDefaultsByType;
     if ($("btnSyncTrackerNow")) $("btnSyncTrackerNow").onclick = () => syncTrackerNow(true);
     if ($("callCancelEdit")) $("callCancelEdit").onclick = resetCallForm;
     if ($("teamCancelEdit")) $("teamCancelEdit").onclick = resetTeamForm;
@@ -2706,6 +3442,16 @@ Rota: ${url}`;
     if ($("maintenanceCancelEdit")) $("maintenanceCancelEdit").onclick = resetMaintenanceForm;
     if ($("payCall")) $("payCall").onchange = fillPaymentFromCall;
     if ($("finCall")) $("finCall").onchange = fillFinanceFromCall;
+    ["financeSearch", "financeTypeFilter", "financeStatusFilter", "financeStartDate", "financeEndDate"].forEach((id) => {
+      if ($(id)) $(id).oninput = renderFinance;
+      if ($(id)) $(id).onchange = renderFinance;
+    });
+    if ($("financeClearFilters")) $("financeClearFilters").onclick = () => {
+      ["financeSearch", "financeTypeFilter", "financeStatusFilter", "financeStartDate", "financeEndDate"].forEach((id) => {
+        if ($(id)) $(id).value = "";
+      });
+      renderFinance();
+    };
   }
 
   function boot() {
@@ -2738,6 +3484,15 @@ Rota: ${url}`;
     deleteCall,
     viewCallProofs,
     reviewCallProofs,
+    generatePublicLink,
+    copyPublicLink,
+    openPublicView,
+    revokePublicLink,
+    togglePublicProofs,
+    togglePublicPayment,
+    openReport,
+    replyPublicChat,
+    markPublicChatRead,
     selectCallDossier,
     reopenCall,
     editTeamMember,

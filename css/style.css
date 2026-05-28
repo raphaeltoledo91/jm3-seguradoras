@@ -74,12 +74,17 @@ h3 { font-size: .95rem; margin-bottom: 10px; }
   display: grid;
   grid-template-columns: 274px minmax(0, 1fr);
 }
+main { min-width: 0; }
 .sidebar {
   background: linear-gradient(145deg, rgba(7, 16, 19, .96), rgba(18, 31, 34, .88));
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  max-height: 100vh;
+  overflow: auto;
+  position: sticky;
+  top: 0;
   box-shadow: 18px 0 48px rgba(0, 0, 0, .18);
 }
 .sidebar-head { padding: 16px; border-bottom: 1px solid rgba(45, 212, 191, .18); }
@@ -152,7 +157,7 @@ h3 { font-size: .95rem; margin-bottom: 10px; }
   top: 0;
   z-index: 20;
 }
-.content { padding: 22px; }
+.content { padding: 22px; max-width: 100%; overflow-x: hidden; }
 .view { display: none; }
 .view.active { display: block; }
 
@@ -535,6 +540,107 @@ td { font-size: .88rem; }
 }
 .finance-summary b { color: var(--text); }
 
+.finance-toolbar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 8px;
+  align-items: end;
+  margin: 0 0 12px;
+}
+.finance-toolbar #financeSearch { grid-column: span 2; }
+.finance-toolbar input,
+.finance-toolbar select {
+  min-height: 38px;
+}
+.finance-toolbar .btn {
+  min-height: 38px;
+  justify-content: center;
+}
+#view-financeiro table,
+#view-pagamentos table {
+  min-width: 0;
+  table-layout: fixed;
+}
+#view-financeiro th,
+#view-financeiro td,
+#view-pagamentos th,
+#view-pagamentos td {
+  padding: 9px 8px;
+  overflow-wrap: anywhere;
+  font-size: .82rem;
+}
+#view-financeiro .row-actions,
+#view-pagamentos .row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.finance-entry-panel .form-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.finance-entry-panel .form-grid .wide {
+  grid-column: span 2;
+}
+.finance-results-panel {
+  overflow: hidden;
+}
+.finance-results-panel table {
+  table-layout: auto;
+}
+.call-quick-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.btn.mini,
+.call-quick-links .btn {
+  min-height: 28px;
+  padding: 6px 8px;
+  font-size: .68rem;
+}
+.driver-route-status {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 9px 10px;
+  background: rgba(255, 255, 255, .035);
+  margin-bottom: 10px;
+}
+.driver-route-status.ok { border-color: rgba(34,197,94,.38); background: rgba(34,197,94,.08); color: var(--green); }
+.driver-route-status.warn { border-color: rgba(245,158,11,.42); background: rgba(245,158,11,.08); color: var(--amber); }
+.driver-route-status.danger { border-color: rgba(239,68,68,.42); background: rgba(239,68,68,.08); color: var(--red); }
+.public-link-box,
+.chat-box,
+.public-chat-admin {
+  border: 1px solid rgba(45, 212, 191, .2);
+  border-radius: var(--radius);
+  background: rgba(255,255,255,.035);
+  padding: 12px;
+}
+.chat-messages {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.chat-messages.compact { max-height: 210px; }
+.chat-message {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px;
+  background: rgba(255,255,255,.035);
+}
+.chat-message.client { border-color: rgba(45, 212, 191, .38); }
+.chat-message.admin { border-color: rgba(34,197,94,.34); }
+.public-page {
+  min-height: 100vh;
+  background: var(--bg);
+}
+.public-shell {
+  width: min(1040px, 100%);
+  margin: 0 auto;
+}
+
 .mobile-top { display: none; }
 .toast {
   position: fixed;
@@ -569,6 +675,11 @@ td { font-size: .88rem; }
   text-transform: uppercase;
   pointer-events: none;
 }
+.app:not(.hidden) ~ .signature-footer {
+  position: static;
+  margin: 10px 18px 12px 292px;
+  text-align: right;
+}
 .report-signature {
   margin-top: 12px;
   padding-top: 8px;
@@ -601,6 +712,10 @@ td { font-size: .88rem; }
     bottom: 6px;
     text-align: center;
     font-size: .58rem;
+  }
+  .app:not(.hidden) ~ .signature-footer {
+    margin: 8px 12px 10px;
+    text-align: center;
   }
 }
 
@@ -801,6 +916,11 @@ td { font-size: .88rem; }
   overflow: hidden;
   background: rgba(255,255,255,.025);
 }
+.proof-thumb.missing {
+  padding: 12px;
+  color: #fecaca;
+  background: rgba(239, 68, 68, .08);
+}
 .proof-thumb img {
   width: 100%;
   aspect-ratio: 4 / 3;
@@ -821,11 +941,56 @@ td { font-size: .88rem; }
   background: #fff;
   display: block;
 }
+.proof-stage-evidence {
+  border: 1px solid rgba(148, 163, 184, .16);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: rgba(255,255,255,.025);
+}
+.proof-stage-evidence h4 { margin: 0 0 8px; }
+.proof-phase-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.proof-phase-grid label { grid-column: 1 / -1; }
+.proof-step-title {
+  color: var(--accent);
+  font-weight: 900;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  padding-top: 8px;
+}
+.damage-diagram {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(45, 212, 191, .18);
+  border-radius: var(--radius);
+  background: rgba(255,255,255,.025);
+}
+.damage-part {
+  min-height: 42px;
+  border: 1px solid rgba(148, 163, 184, .22);
+  border-radius: var(--radius);
+  background: rgba(255,255,255,.035);
+  color: var(--text);
+  font-size: .74rem;
+  font-weight: 800;
+}
+.damage-part.selected {
+  border-color: rgba(239, 68, 68, .72);
+  background: rgba(239, 68, 68, .16);
+  color: #fecaca;
+}
 @media (max-width: 1180px) {
   .ops-grid { grid-template-columns: 1fr; }
   .ops-side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ops-map { height: 60vh; }
   .dash-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .finance-toolbar { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .finance-entry-panel .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .ops-head { align-items: stretch; flex-direction: column; }
@@ -837,6 +1002,8 @@ td { font-size: .88rem; }
   .ops-map-panel > .actions > .actions .btn { width: 100%; justify-content: center; }
   .dash-kpi-grid, .dossier-grid { grid-template-columns: 1fr; }
   .dossier-head { flex-direction: column; }
+  .finance-toolbar, .proof-phase-grid, .damage-diagram { grid-template-columns: 1fr; }
+  .finance-toolbar #financeSearch { grid-column: auto; }
   .panel-collapse-toggle { min-width: 112px; }
 }
 

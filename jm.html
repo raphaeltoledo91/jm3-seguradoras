@@ -1,13 +1,13 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#07110f">
+  <meta name="theme-color" content="#07111f">
   <title>JM Guinchos - Gestor</title>
-  <link rel="manifest" href="manifest.json?v=jm-v21-rafacar-mapa-icones">
+  <link rel="manifest" href="manifest.json?v=jm-v25-laudos-financeiro-layout">
   <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="css/style.css?v=jm-v21-rafacar-mapa-icones">
+  <link rel="stylesheet" href="css/style.css?v=jm-v25-laudos-financeiro-layout">
 </head>
 <body>
   <section id="loginView" class="login">
@@ -169,7 +169,7 @@
                 <div class="wide"><label>Cliente cadastrado</label><select id="callCustomerId"></select></div>
                 <div><label>Cliente</label><input id="callClient" required></div>
                 <div><label>WhatsApp</label><input id="callPhone" inputmode="tel"></div>
-                <div><label>Serviço</label><select id="callType"><option>Guincho</option><option>Munck</option><option>Socorro</option><option>Remoção</option><option>Pátio</option><option>Seguradora</option></select></div>
+                <div><label>Serviço</label><select id="callType"><option>Guincho</option><option>Munck</option><option>Socorro</option><option>Remoção</option><option>Patio</option><option>Seguradora</option></select></div>
                 <div><label>Valor previsto</label><input id="callPrice" inputmode="decimal" placeholder="0,00"></div>
                 <div><label>Origem comercial</label><select id="callSource"><option value="Particular">Particular</option><option value="Seguradora">Seguradora</option><option value="Assistência 24h">Assistência 24h</option><option value="Empresa parceira">Empresa parceira</option><option value="Pátio/convênio">Pátio/convênio</option></select></div>
                 <div><label>Prioridade/SLA</label><select id="callPriority"><option value="normal">Normal</option><option value="alta">Alta</option><option value="urgente">Urgente</option></select></div>
@@ -228,6 +228,35 @@
                     </div>
                   </div>
                   <div id="smartRouteBox" class="smart-route-box small muted">Modo gratuito: use coordenadas ou link com coordenadas. O algoritmo usa Tracker RAFA + OpenStreetMap/OSRM para desenhar a rota por ruas; se falhar, mantém fallback estimado.</div>
+                </div>
+                <div class="wide tow-pricing-card">
+                  <div class="actions" style="justify-content:space-between;align-items:center">
+                    <div>
+                      <b>Precificação do guincho</b>
+                      <div class="muted small">Cálculo editável no chamado, inspirado no fluxo OFICIN_IA: saída + KM, desconto próprio, franquia e ida/volta.</div>
+                    </div>
+                    <label class="toggle-line"><input type="checkbox" id="callTowActive"> Cobrar no chamado</label>
+                  </div>
+                  <div class="form-grid compact-grid">
+                    <div class="wide"><label>Tipo de transporte</label><select id="callTowType"><option value="leve">Leve até 1.500 kg / moto / semirreboque até 750 kg</option><option value="pesado">Pesado acima de 1.500 kg / van / coletivo / carga / semirreboque acima de 750 kg</option></select></div>
+                    <div><label>KM rodado na ida</label><input id="callTowKm" inputmode="decimal" placeholder="Ex: 30,00"></div>
+                    <div><label>Franquia inclusa (km)</label><input id="callTowFranchiseKm" inputmode="decimal" value="15"></div>
+                    <div><label>Saída guincho (R$)</label><input id="callTowBaseOut" inputmode="decimal" value="253,22"></div>
+                    <div><label>KM base (R$)</label><input id="callTowKmValue" inputmode="decimal" value="8,51"></div>
+                    <div><label>Desc. guincho (%)</label><input id="callTowDiscountPct" inputmode="decimal" value="0"></div>
+                    <label class="check-card"><input type="checkbox" id="callTowRoundTrip" checked> Cobrar ida e volta</label>
+                    <label class="check-card"><input type="checkbox" id="callTowSubtractFranchise"> Abater franquia de KM</label>
+                    <div><label>Saída líquida</label><input id="callTowNetOut" readonly value="R$ 0,00"></div>
+                    <div><label>KM líquido</label><input id="callTowNetKm" readonly value="R$ 0,00"></div>
+                    <div><label>Valor da ida</label><input id="callTowOneWay" readonly value="R$ 0,00"></div>
+                    <div><label>Total guincho</label><input id="callTowTotal" readonly value="R$ 0,00"></div>
+                    <div class="wide"><label>Observação do deslocamento</label><input id="callTowNotes" placeholder="Ex: remoção ida e volta, excedente KM, apoio externo..."></div>
+                  </div>
+                  <div class="actions tow-actions">
+                    <button class="btn" id="btnTowUseRouteKm" type="button">Usar KM da rota calculada</button>
+                    <button class="btn good" id="btnTowApplyToPrice" type="button">Aplicar total no valor previsto</button>
+                  </div>
+                  <div id="towPricingStatus" class="small muted">Ao traçar rota inteligente, o sistema pode sugerir o KM automaticamente. O gestor pode editar tudo antes de salvar.</div>
                 </div>
                 <div class="wide"><label>Observações</label><textarea id="callNotes"></textarea></div>
                 <button class="btn primary wide" type="submit">Registrar chamado</button>
@@ -317,8 +346,8 @@
           <div class="grid">
             <div class="panel col-12">
               <h2>Rastreamento e rotas</h2>
-              <p class="muted small">Mapa gratuito Leaflet/OpenStreetMap. O sistema usa o Tracker RAFA para posicionar a frota, selecionar veículo próximo e acompanhar atendimento em tempo real.</p>
-              <div class="actions" style="margin-bottom:10px"><button class="btn primary" id="btnSyncTrackerNow" type="button">Atualizar Tracker agora</button><a class="btn" target="_blank" rel="noopener noreferrer" href="https://gps2.rafacarrastreadores.com.br">Abrir plataforma RAFA</a></div>
+              <p class="muted small">Mapa gratuito Leaflet/OpenStreetMap. O sistema usa posições normalizadas dos rastreadores cadastrados, preservando RAFA e usando GPS celular como fallback quando habilitado.</p>
+              <div class="actions" style="margin-bottom:10px"><button class="btn primary" id="btnSyncTrackerNow" type="button">Atualizar rastreadores agora</button><a class="btn" target="_blank" rel="noopener noreferrer" href="https://gps2.rafacarrastreadores.com.br">Abrir plataforma RAFA</a></div>
               <div id="fleetMap" class="map"></div>
             </div>
             <div class="panel col-12">
@@ -330,7 +359,7 @@
 
         <section id="view-financeiro" class="view">
           <div class="grid">
-            <div class="panel col-4">
+            <div class="panel col-12 finance-entry-panel">
               <h2>Lançamento financeiro</h2>
               <form id="financeForm" class="form-grid">
                 <div><label>Tipo</label><select id="finType"><option value="entrada">Entrada</option><option value="saida">Saída</option></select></div>
@@ -347,8 +376,28 @@
                 <button class="btn wide hidden" id="financeCancelEdit" type="button">Cancelar edição</button>
               </form>
             </div>
-            <div class="panel col-8">
+            <div class="panel col-12 finance-results-panel">
               <h2>Financeiro e despesas</h2>
+              <div class="finance-toolbar" aria-label="Filtros do financeiro">
+                <input id="financeSearch" placeholder="Buscar por cliente, descrição, placa, protocolo ou motorista">
+                <select id="financeTypeFilter" aria-label="Tipo financeiro">
+                  <option value="">Todos os tipos</option>
+                  <option value="entrada">Entradas</option>
+                  <option value="saida">Saídas</option>
+                </select>
+                <select id="financeStatusFilter" aria-label="Status financeiro">
+                  <option value="">Todos os status</option>
+                  <option value="recebido">Recebido</option>
+                  <option value="a receber">A receber</option>
+                  <option value="a faturar">A faturar</option>
+                  <option value="pago">Pago</option>
+                  <option value="pendente">Pendente</option>
+                  <option value="glosado">Glosado</option>
+                </select>
+                <input id="financeStartDate" type="date" aria-label="Data inicial">
+                <input id="financeEndDate" type="date" aria-label="Data final">
+                <button class="btn" id="financeClearFilters" type="button">Limpar filtros</button>
+              </div>
               <div id="financeTable" class="table-wrap"></div>
               <h2 style="margin-top:18px">Despesas de motorista para aprovar</h2>
               <div id="expenseApproval" class="table-wrap"></div>
@@ -358,7 +407,7 @@
 
         <section id="view-pagamentos" class="view">
           <div class="grid">
-            <div class="panel col-4">
+            <div class="panel col-12 finance-entry-panel">
               <h2>Pagamentos de clientes e seguradoras</h2>
               <form id="paymentForm" class="form-grid">
                 <div><label>Tipo</label><select id="payType"><option value="entrada">Receber</option><option value="saida">Pagar</option></select></div>
@@ -377,7 +426,7 @@
                 <button class="btn wide hidden" id="paymentCancelEdit" type="button">Cancelar edição</button>
               </form>
             </div>
-            <div class="panel col-8">
+            <div class="panel col-12 finance-results-panel">
               <h2>Contas a receber e a pagar</h2>
               <div id="paymentsSummary"></div>
               <div id="paymentsTable" class="table-wrap"></div>
@@ -393,7 +442,12 @@
                 <div><label>Placa</label><input id="vehiclePlate" maxlength="8" required></div>
                 <div><label>Apelido</label><input id="vehicleAlias"></div>
                 <div><label>Tipo</label><input id="vehicleType"></div>
+                <div><label>Provedor de GPS</label><select id="vehicleTrackerProvider"><option value="">RAFA/automático</option></select></div>
                 <div><label>Tracker ID / deviceId</label><input id="vehicleTrackerId" placeholder="81 ou uniqueId"></div>
+                <div><label>External ID</label><input id="vehicleTrackerExternalId" placeholder="ID externo no provedor"></div>
+                <div><label>IMEI</label><input id="vehicleTrackerImei" inputmode="numeric" placeholder="IMEI do rastreador"></div>
+                <div><label>Placa no provedor</label><input id="vehicleTrackerPlate" placeholder="ABC1D23"></div>
+                <div><label>Rastreamento ativo</label><select id="vehicleTrackerEnabled"><option value="true">Sim</option><option value="false">Não</option></select></div>
                 <div><label>Status</label><select id="vehicleStatus"><option>Disponível</option><option>Em atendimento</option><option>Manutenção</option><option>Indisponível</option></select></div>
                 <button class="btn primary wide" type="submit">Salvar veículo</button>
               </form>
@@ -450,15 +504,16 @@
   <footer class="signature-footer">Powered by thIAguinho Soluções Digitais</footer>
   <div id="toast" class="toast"></div>
 
-  <script src="js/config.firebase.js?v=jm-v21-rafacar-mapa-icones"></script>
+  <script src="js/config.firebase.js?v=jm-v25-laudos-financeiro-layout"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
-  <script src="js/utils.js?v=jm-v21-rafacar-mapa-icones"></script>
-  <script src="js/firebase.js?v=jm-v21-rafacar-mapa-icones"></script>
-  <script src="js/tracker.js?v=jm-v21-rafacar-mapa-icones"></script>
-  <script src="js/google-maps.js?v=jm-v21-rafacar-mapa-icones"></script>
-  <script src="js/mapa.js?v=jm-v21-rafacar-mapa-icones"></script>
-  <script src="js/app.js?v=jm-v21-rafacar-mapa-icones"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
+  <script src="js/utils.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/firebase.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/tracker.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/google-maps.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/mapa.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/app.js?v=jm-v25-laudos-financeiro-layout"></script>
 </body>
 </html>
