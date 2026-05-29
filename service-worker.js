@@ -1,4 +1,4 @@
-﻿const CACHE_NAME = "jm-v26-ixc-dashboards-permissoes";
+const CACHE_NAME = "jm-v26-ixc-dashboards-permissoes";
 const ASSETS = [
   "./",
   "./index.html",
