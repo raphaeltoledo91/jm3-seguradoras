@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#07111f">
   <title>JM Guinchos - Superadmin</title>
   <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="css/style.css?v=jm-v26-ixc-dashboards-permissoes">
+  <link rel="stylesheet" href="css/style.css?v=jm-v25-laudos-financeiro-layout">
 </head>
 <body>
   <section id="superLoginView" class="login">
@@ -62,16 +62,6 @@
             <div><label>E-mail</label><input id="adminEmail" type="email" required></div>
             <div><label>Senha inicial</label><input id="adminPass" type="password" autocomplete="new-password" required></div>
             <div><label>Perfil</label><select id="adminRole"><option value="owner">Dono/Gestor master</option><option value="admin">Gestor/Admin</option><option value="gerente">Gerente</option><option value="auxiliar">Auxiliar</option><option value="atendente">Atendente</option><option value="finance">Financeiro</option><option value="driver">Motorista</option></select></div>
-            <div class="wide permission-panel">
-              <div class="permission-head">
-                <div>
-                  <b>Permissões de módulos e dashboards</b>
-                  <p class="muted small">Marque o que este usuário poderá acessar no painel gestor. As permissões também ficam gravadas para o controle de segurança.</p>
-                </div>
-                <button class="btn mini" id="adminApplyRolePermissions" type="button">Aplicar perfil</button>
-              </div>
-              <div id="adminPermissionMatrix" class="permission-grid"></div>
-            </div>
             <button class="btn primary wide" type="submit">Criar usuário no Auth</button>
           </form>
         </section>
@@ -160,15 +150,14 @@
   <footer class="signature-footer">Powered by thIAguinho Soluções Digitais</footer>
   <div id="toast" class="toast"></div>
 
-  <script src="js/config.firebase.js?v=jm-v26-ixc-dashboards-permissoes"></script>
+  <script src="js/config.firebase.js?v=jm-v25-laudos-financeiro-layout"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
-  <script src="js/utils.js?v=jm-v26-ixc-dashboards-permissoes"></script>
-  <script src="js/firebase.js?v=jm-v26-ixc-dashboards-permissoes"></script>
-  <script src="js/tracker.js?v=jm-v26-ixc-dashboards-permissoes"></script>
-  <script src="js/dashboard-ixc.js?v=jm-v26-ixc-dashboards-permissoes"></script>
-  <script src="js/superadmin.js?v=jm-v26-ixc-dashboards-permissoes"></script>
+  <script src="js/utils.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/firebase.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/tracker.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/superadmin.js?v=jm-v25-laudos-financeiro-layout"></script>
 </body>
 </html>

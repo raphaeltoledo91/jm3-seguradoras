@@ -10,7 +10,7 @@
   const { auth, secondaryAuth, db, ts, arrayUnion, emailIsAdmin, getRealtimeDb, rtdbKey } = window.JM.firebase;
   const cfg = window.JM_CONFIG || {};
   const SYSTEM_SIGNATURE = "Powered by thIAguinho Soluções Digitais";
-  const LOGIN_FLOW_VERSION = "jm-v26-ixc-dashboards-permissoes";
+  const LOGIN_FLOW_VERSION = "jm-v25-laudos-financeiro-layout";
   let trackerTimer = null;
   let trackerBusy = false;
   let mapRefreshTimer = null;
@@ -48,9 +48,7 @@
     mobileGps: { vehicles: {}, calls: {} },
     mobileGpsUnsubs: [],
     publicChatMessages: {},
-    publicChatUnsubs: {},
-    dashboardKey: "principal",
-    dashboardFilters: { text: "", period: "30" }
+    publicChatUnsubs: {}
   };
 
   const unsubscribers = [];
@@ -73,20 +71,8 @@
     return state.profile && list.includes(normalizedRole(state.profile.role));
   }
 
-  function permissionValue(area, key) {
-    const permissions = state.profile && state.profile.permissions || {};
-    const bucket = permissions && permissions[area] || {};
-    if (!Object.prototype.hasOwnProperty.call(bucket, key)) return null;
-    return bucket[key] === true;
-  }
-
-  function permissionOrDefault(area, key, fallback) {
-    const explicit = permissionValue(area, key);
-    return explicit === null ? !!fallback : !!explicit;
-  }
-
   function canOwnCompany() {
-    return hasRole(OWNER_ROLES) || permissionValue("modules", "equipe") === true;
+    return hasRole(OWNER_ROLES);
   }
 
   function isAdmin() {
@@ -94,68 +80,23 @@
   }
 
   function canOperateCalls() {
-    return hasRole(OPERATIONS_ROLES) || hasRole(FINANCE_ROLES)
-      || ["operacao", "chamados", "finalizados", "integracoes"].some((key) => permissionValue("modules", key) === true);
+    return hasRole(OPERATIONS_ROLES) || hasRole(FINANCE_ROLES);
   }
 
   function canManageFinance() {
-    return permissionOrDefault("modules", "financeiro", hasRole(FINANCE_ROLES))
-      || permissionValue("modules", "pagamentos") === true
-      || ["financeiro", "contas_pagar", "contas_receber", "cobrancas", "faturas"].some((key) => permissionValue("dashboards", key) === true);
+    return hasRole(FINANCE_ROLES);
   }
 
   function canManageFleet() {
-    return permissionOrDefault("modules", "frota", hasRole(FLEET_ROLES))
-      || permissionValue("dashboards", "monitoramento_fibra") === true;
+    return hasRole(FLEET_ROLES);
   }
 
   function canManageTeam() {
-    return permissionOrDefault("modules", "equipe", hasRole(OWNER_ROLES));
+    return canOwnCompany();
   }
 
   function canSeeSensitiveFinance() {
     return canManageFinance();
-  }
-
-  function defaultModuleAccess(view) {
-    const defaults = {
-      dashboard: isOffice(),
-      operacao: canOperateCalls(),
-      chamados: canOperateCalls(),
-      finalizados: isOffice(),
-      clientes: isOffice(),
-      integracoes: canOperateCalls(),
-      mapa: isOffice(),
-      financeiro: canManageFinance(),
-      pagamentos: canManageFinance(),
-      frota: canManageFleet(),
-      equipe: canManageTeam()
-    };
-    return !!defaults[view];
-  }
-
-  function canAccessModule(view) {
-    return permissionOrDefault("modules", view, defaultModuleAccess(view));
-  }
-
-  function defaultDashboardAccess(key) {
-    const dashboards = window.JM && window.JM.ixcDashboards;
-    const def = dashboards && dashboards.get ? dashboards.get(key) : null;
-    if (!isOffice()) return false;
-    if (!def) return isOffice();
-    if (def.sensitive || def.area === "financeiro") return canManageFinance();
-    if (def.area === "admin") return canManageTeam() || canManageFleet() || normalizedRole(state.profile && state.profile.role) === "gerente";
-    return isOffice();
-  }
-
-  function canAccessDashboard(key) {
-    return permissionOrDefault("dashboards", key, defaultDashboardAccess(key));
-  }
-
-  function firstAllowedDashboard() {
-    const dashboards = window.JM && window.JM.ixcDashboards && window.JM.ixcDashboards.all ? window.JM.ixcDashboards.all() : [];
-    const allowed = dashboards.find((item) => canAccessDashboard(item.key));
-    return allowed && allowed.key || "principal";
   }
 
   function isFinalStatus(status) {
@@ -1189,18 +1130,11 @@
     window.open(url, "_blank");
   }
 
-  function showView(name, dashboardKey) {
-    if (name === "dashboard") {
-      const nextKey = dashboardKey || state.dashboardKey || firstAllowedDashboard();
-      state.dashboardKey = canAccessDashboard(nextKey) ? nextKey : firstAllowedDashboard();
-    }
+  function showView(name) {
     $all(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + name));
-    $all("#navButtons button").forEach((b) => {
-      const active = b.dataset.view === name && (name !== "dashboard" || (b.dataset.dashboard || "principal") === state.dashboardKey);
-      b.classList.toggle("active", active);
-    });
+    $all("#navButtons button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
     const titles = {
-      dashboard: window.JM.ixcDashboards && window.JM.ixcDashboards.get ? window.JM.ixcDashboards.get(state.dashboardKey).label : "Dashboard",
+      dashboard: "Dashboard",
       operacao: "Central Operacional",
       chamados: "Chamados",
       finalizados: "Finalizados",
@@ -1215,13 +1149,12 @@
     };
     $("pageTitle").textContent = titles[name] || name;
     document.body.classList.remove("menu-open");
-    if (name === "dashboard") renderDashboard();
     refreshMaps();
   }
 
   function bindNavigation() {
     $all("#navButtons button").forEach((btn) => {
-      btn.onclick = () => showView(btn.dataset.view, btn.dataset.dashboard);
+      btn.onclick = () => showView(btn.dataset.view);
     });
     $("menuBtn").onclick = () => document.body.classList.toggle("menu-open");
     if ($("opsStatusFilter")) $("opsStatusFilter").onchange = (e) => { state.operationFilter = e.target.value || "ativos"; renderOperations(); refreshMaps(); };
@@ -1345,7 +1278,7 @@
       const role = normalizedRole(data.role || "admin");
       if (data.active === false) return { allowed: false, reason: "inactive" };
       if (!OFFICE_ROLES.includes(role)) return { allowed: false, reason: "not-manager-role" };
-      return { allowed: true, role, permissions: data.permissions || {}, source: "managerAccess" };
+      return { allowed: true, role, source: "managerAccess" };
     } catch (err) {
       console.warn("Falha ao verificar managerAccess", err);
       return { allowed: false, error: err };
@@ -1404,7 +1337,6 @@
     const repairedProfile = {
       ...baseProfile,
       role: registryAccess.role || "admin",
-      permissions: registryAccess.permissions || {},
       loginFixedAt: new Date().toISOString(),
       loginFlowVersion: LOGIN_FLOW_VERSION,
       managerAccessSource: registryAccess.source || "unknown"
@@ -1558,21 +1490,24 @@
   }
 
   function applyRoleVisibility() {
-    $all("#navButtons button").forEach((btn) => {
-      const view = btn.dataset.view;
-      const dash = btn.dataset.dashboard;
-      const allowed = view === "dashboard" && dash ? canAccessDashboard(dash) : canAccessModule(view);
-      btn.classList.toggle("hidden", !allowed);
+    const visibility = {
+      finalizados: isOffice(),
+      clientes: isOffice(),
+      integracoes: canOperateCalls(),
+      financeiro: canManageFinance(),
+      pagamentos: canManageFinance(),
+      frota: canManageFleet(),
+      equipe: canManageTeam()
+    };
+    Object.entries(visibility).forEach(([view, allowed]) => {
+      const btn = document.querySelector(`#navButtons button[data-view="${view}"]`);
+      if (btn) btn.classList.toggle("hidden", !allowed);
     });
     // Importante: nunca redirecionar o jm.html para motorista.html.
     const active = document.querySelector(".view.active");
     if (active) {
       const current = active.id.replace("view-", "");
-      if (current === "dashboard" && !canAccessDashboard(state.dashboardKey)) {
-        showView("dashboard", firstAllowedDashboard());
-      } else if (current !== "dashboard" && !canAccessModule(current)) {
-        showView("dashboard", firstAllowedDashboard());
-      }
+      if (visibility[current] === false) showView("dashboard");
     }
   }
 
@@ -1777,22 +1712,38 @@
   }
 
   function renderDashboard() {
-    if (!$("dashboardDetail") || !window.JM.ixcDashboards) return;
-    if (!canAccessDashboard(state.dashboardKey)) state.dashboardKey = firstAllowedDashboard();
-    if ($("dashboardSearch") && $("dashboardSearch").value !== (state.dashboardFilters.text || "")) $("dashboardSearch").value = state.dashboardFilters.text || "";
-    if ($("dashboardPeriod") && $("dashboardPeriod").value !== (state.dashboardFilters.period || "30")) $("dashboardPeriod").value = state.dashboardFilters.period || "30";
-    $("dashboardDetail").innerHTML = window.JM.ixcDashboards.render({
-      state,
-      key: state.dashboardKey,
-      filters: state.dashboardFilters,
-      canSeeFinance: canSeeSensitiveFinance(),
-      canOwnCompany: canOwnCompany(),
-      canManageFinance: canManageFinance(),
-      canManageFleet: canManageFleet()
-    });
-    $all("#navButtons button[data-view='dashboard']").forEach((b) => {
-      b.classList.toggle("active", (b.dataset.dashboard || "principal") === state.dashboardKey);
-    });
+    const calls = visibleRows(state.calls);
+    const active = calls.filter((c) => !isFinalStatus(c.status));
+    const now = new Date();
+    const transactions = visibleRows(state.transactions);
+    const expenses = visibleRows(state.expenses);
+    const finalized = calls.filter((c) => isFinalStatus(c.status));
+    const toBill = finalized.filter((c) => ["a_faturar", "aguardando_provas", "aberto"].includes(String(c.billingStatus || "aberto")));
+    const overdueSla = active.filter((c) => slaInfo(c).overdue);
+    const incompleteProofs = active.concat(toBill).filter((c) => !callProofComplete(c));
+    const receivables = transactions.filter((t) => t.type === "entrada" && ["A receber", "A faturar", "Pendente"].includes(String(t.status || ""))).reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    const payables = transactions.filter((t) => t.type === "saida" && ["A pagar", "Pendente"].includes(String(t.status || ""))).reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    const revenue = transactions.filter((t) => t.type === "entrada").filter((t) => {
+      const d = new Date(t.date || t.createdAt || 0);
+      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    }).reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    const pendingExpenses = expenses.filter((e) => e.status === "pendente").reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const online = visibleRows(state.vehicles).map(vehicleWithLiveGps).filter((v) => vehicleLivePoint(v) && (v.lastTrackerAt || v.lastPhoneGpsAt)).length;
+    $("kpiActiveCalls").textContent = active.length;
+    $("kpiRevenue").textContent = canSeeSensitiveFinance() ? money(revenue) : "Restrito";
+    $("kpiExpenses").textContent = canSeeSensitiveFinance() ? money(pendingExpenses) : "Restrito";
+    $("kpiOnline").textContent = online;
+    if ($("dashboardOpsKpis")) {
+      $("dashboardOpsKpis").innerHTML = `
+        <div class="card kpi"><span>Finalizados</span><strong>${finalized.length}</strong></div>
+        <div class="card kpi"><span>A faturar / provas</span><strong>${toBill.length}</strong></div>
+        <div class="card kpi"><span>SLA vencido</span><strong>${overdueSla.length}</strong></div>
+        <div class="card kpi"><span>Provas pendentes</span><strong>${incompleteProofs.length}</strong></div>
+        <div class="card kpi"><span>A receber</span><strong>${canSeeSensitiveFinance() ? money(receivables) : "Restrito"}</strong></div>
+        <div class="card kpi"><span>A pagar</span><strong>${canSeeSensitiveFinance() ? money(payables) : "Restrito"}</strong></div>`;
+    }
+    const events = calls.flatMap((c) => (c.timeline || []).map((t) => ({ ...t, call: c }))).sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))).slice(0, 10);
+    $("timelineBox").innerHTML = events.length ? events.map((e) => `<div class="timeline-item"><b>${esc(e.call.protocolo || e.call.cliente || "Chamado")}</b><br><span>${esc(e.text || "")}</span><br><small>${dateTime(e.at)}</small></div>`).join("") : `<p class="muted">Sem eventos ainda.</p>`;
   }
 
   function filteredOperationCalls() {
@@ -3434,41 +3385,6 @@ Rota: ${url}`;
     toast("Despesa reprovada.", "ok");
   }
 
-  function selectDashboard(key) {
-    if (!canAccessDashboard(key)) return toast("Dashboard sem permissão para este usuário.", "danger");
-    showView("dashboard", key);
-  }
-
-  function openDashboardRecord(kind, id) {
-    if (!id) return;
-    if (kind === "calls") {
-      showView("chamados");
-      state.selectedDossierCallId = id;
-      renderCallDossier();
-      return;
-    }
-    if (kind === "customers") {
-      showView("clientes");
-      if (state.customers[id]) editCustomer(id);
-      return;
-    }
-    if (kind === "vehicles") {
-      showView("frota");
-      return;
-    }
-    if (kind === "users") {
-      showView("equipe");
-      if (canManageTeam() && state.users[id]) editTeamMember(id);
-      return;
-    }
-    if (kind === "transactions") {
-      showView("financeiro");
-      if (canManageFinance() && state.transactions[id]) editTransaction(id);
-      return;
-    }
-    showView("dashboard", state.dashboardKey);
-  }
-
   function refreshMaps() {
     const active = document.querySelector(".view.active");
     window.JM_MAP_SETTINGS = activeMapSettings();
@@ -3536,21 +3452,6 @@ Rota: ${url}`;
       });
       renderFinance();
     };
-    if ($("dashboardSearch")) $("dashboardSearch").oninput = (e) => {
-      state.dashboardFilters.text = e.target.value || "";
-      renderDashboard();
-      refreshMaps();
-    };
-    if ($("dashboardPeriod")) $("dashboardPeriod").onchange = (e) => {
-      state.dashboardFilters.period = e.target.value || "30";
-      renderDashboard();
-      refreshMaps();
-    };
-    if ($("dashboardClearFilters")) $("dashboardClearFilters").onclick = () => {
-      state.dashboardFilters = { text: "", period: "30" };
-      renderDashboard();
-      refreshMaps();
-    };
   }
 
   function boot() {
@@ -3608,8 +3509,6 @@ Rota: ${url}`;
     deleteMaintenance,
     approveExpense,
     rejectExpense,
-    selectDashboard,
-    openDashboardRecord,
     applySmartVehicle,
     calculateSmartRoute,
     readSharedRouteLink,

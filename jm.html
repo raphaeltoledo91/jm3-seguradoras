@@ -1,13 +1,13 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#07111f">
   <title>JM Guinchos - Gestor</title>
-  <link rel="manifest" href="manifest.json?v=jm-v26-ixc-dashboards-permissoes">
+  <link rel="manifest" href="manifest.json?v=jm-v25-laudos-financeiro-layout">
   <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="css/style.css?v=jm-v26-ixc-dashboards-permissoes">
+  <link rel="stylesheet" href="css/style.css?v=jm-v25-laudos-financeiro-layout">
 </head>
 <body>
   <section id="loginView" class="login">
@@ -42,27 +42,8 @@
         </div>
       </div>
       <nav class="nav" id="navButtons" aria-label="Módulos principais">
-        <div class="nav-group-title">Dashboards</div>
-        <button data-view="dashboard" data-dashboard="busca" data-icon="BP">Barra de Pesquisa</button>
-        <button data-view="dashboard" data-dashboard="principal" data-icon="DP" class="active">Dashboard Principal</button>
-        <button data-view="dashboard" data-dashboard="acessos" data-icon="AC">Acessos (Logins)</button>
-        <button data-view="dashboard" data-dashboard="atendimentos" data-icon="AT">Atendimentos</button>
-        <button data-view="dashboard" data-dashboard="cobrancas" data-icon="CB">Cobranças</button>
-        <button data-view="dashboard" data-dashboard="contas_pagar" data-icon="CP">Contas a Pagar</button>
-        <button data-view="dashboard" data-dashboard="contas_receber" data-icon="CR">Contas a Receber</button>
-        <button data-view="dashboard" data-dashboard="crm" data-icon="CM">CRM</button>
-        <button data-view="dashboard" data-dashboard="crm_corporativo" data-icon="PJ">CRM Corporativo</button>
-        <button data-view="dashboard" data-dashboard="crm_pessoa_fisica" data-icon="PF">CRM Pessoa Física</button>
-        <button data-view="dashboard" data-dashboard="contratos" data-icon="CT">Contratos</button>
-        <button data-view="dashboard" data-dashboard="colaborador" data-icon="CO">Colaborador</button>
-        <button data-view="dashboard" data-dashboard="faturas" data-icon="FT">Faturas</button>
-        <button data-view="dashboard" data-dashboard="financeiro" data-icon="FN">Financeiro</button>
-        <button data-view="dashboard" data-dashboard="monitoramento_fibra" data-icon="MF">Monitoramento Fibra</button>
-        <button data-view="dashboard" data-dashboard="negociacoes" data-icon="NG">Negociações</button>
-        <button data-view="dashboard" data-dashboard="ordem_servico" data-icon="OS">Ordem de Serviço</button>
-        <button data-view="dashboard" data-dashboard="servidor" data-icon="SV">Servidor</button>
-        <button data-view="dashboard" data-dashboard="ixc_soft" data-icon="IX">Dashboards IXC</button>
         <div class="nav-group-title">Operação</div>
+        <button data-view="dashboard" data-icon="DB" class="active">Dashboard</button>
         <button data-view="operacao" data-icon="CO">Central Operacional</button>
         <button data-view="chamados" data-icon="CH">Chamados</button>
         <button data-view="finalizados" data-icon="OK">Finalizados</button>
@@ -96,19 +77,20 @@
 
       <div class="content">
         <section id="view-dashboard" class="view active">
-          <div class="dashboard-shell">
-            <div class="dashboard-controlbar panel">
-              <input id="dashboardSearch" placeholder="Buscar na dashboard por cliente, protocolo, placa, financeiro ou usuário">
-              <select id="dashboardPeriod" aria-label="Período dos dashboards">
-                <option value="30">Últimos 30 dias</option>
-                <option value="7">Últimos 7 dias</option>
-                <option value="90">Últimos 90 dias</option>
-                <option value="month">Mês atual</option>
-                <option value="all">Todos os registros</option>
-              </select>
-              <button class="btn" id="dashboardClearFilters" type="button">Limpar</button>
+          <div class="grid">
+            <div class="card kpi col-3"><span>Chamados ativos</span><strong id="kpiActiveCalls">0</strong></div>
+            <div class="card kpi col-3"><span>Receita do mês</span><strong id="kpiRevenue">R$ 0,00</strong></div>
+            <div class="card kpi col-3"><span>Despesas pendentes</span><strong id="kpiExpenses">R$ 0,00</strong></div>
+            <div class="card kpi col-3"><span>Frota online</span><strong id="kpiOnline">0</strong></div>
+            <div id="dashboardOpsKpis" class="col-12 dash-kpi-grid"></div>
+            <div class="panel col-7">
+              <h2>Mapa operacional</h2>
+              <div id="dashboardMap" class="map"></div>
             </div>
-            <div id="dashboardDetail"></div>
+            <div class="panel col-5">
+              <h2>Últimos eventos</h2>
+              <div id="timelineBox" class="timeline"></div>
+            </div>
           </div>
         </section>
 
@@ -522,17 +504,16 @@
   <footer class="signature-footer">Powered by thIAguinho Soluções Digitais</footer>
   <div id="toast" class="toast"></div>
 
-  <script src="js/config.firebase.js?v=jm-v26-ixc-dashboards-permissoes"></script>
+  <script src="js/config.firebase.js?v=jm-v25-laudos-financeiro-layout"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
-  <script src="js/utils.js?v=jm-v26-ixc-dashboards-permissoes"></script>
-  <script src="js/firebase.js?v=jm-v26-ixc-dashboards-permissoes"></script>
-  <script src="js/tracker.js?v=jm-v26-ixc-dashboards-permissoes"></script>
-  <script src="js/google-maps.js?v=jm-v26-ixc-dashboards-permissoes"></script>
-  <script src="js/mapa.js?v=jm-v26-ixc-dashboards-permissoes"></script>
-  <script src="js/dashboard-ixc.js?v=jm-v26-ixc-dashboards-permissoes"></script>
-  <script src="js/app.js?v=jm-v26-ixc-dashboards-permissoes"></script>
+  <script src="js/utils.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/firebase.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/tracker.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/google-maps.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/mapa.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/app.js?v=jm-v25-laudos-financeiro-layout"></script>
 </body>
 </html>
