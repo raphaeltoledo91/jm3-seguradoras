@@ -1,4 +1,4 @@
-﻿(function () {
+(function () {
   "use strict";
 
   const {
@@ -9,11 +9,24 @@
   } = window.JM.utils;
   const { auth, secondaryAuth, db, ts, arrayUnion, emailIsAdmin, getRealtimeDb, rtdbKey } = window.JM.firebase;
   const cfg = window.JM_CONFIG || {};
-  const SYSTEM_SIGNATURE = "Powered by thIAguinho Soluções Digitais";
-  const LOGIN_FLOW_VERSION = "jm-v25-laudos-financeiro-layout";
+  const SYSTEM_SIGNATURE = "";
+  const LOGIN_FLOW_VERSION = "jm-v27-mapa-ia-fechamento";
   let trackerTimer = null;
   let trackerBusy = false;
   let mapRefreshTimer = null;
+
+  function readLocal(key, fallback) {
+    try {
+      const value = localStorage.getItem(key);
+      return value == null || value === "" ? fallback : value;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function writeLocal(key, value) {
+    try { localStorage.setItem(key, value); } catch (_) {}
+  }
 
   const state = {
     user: null,
@@ -48,7 +61,11 @@
     mobileGps: { vehicles: {}, calls: {} },
     mobileGpsUnsubs: [],
     publicChatMessages: {},
-    publicChatUnsubs: {}
+    publicChatUnsubs: {},
+    mapProvider: readLocal("jm.map.provider", "google_road"),
+    sidebarCollapsed: readLocal("jm.sidebar.collapsed", "false") === "true",
+    aiDrafts: [],
+    insuranceClosingGroups: {}
   };
 
   const unsubscribers = [];
@@ -170,6 +187,7 @@
   function activeMapSettings() {
     const base = mergeNonEmpty(cfg.map || {}, state.settings.map || state.settings.googleMaps || {});
     if (!base.searchSuffix && cfg.empresa && cfg.empresa.cidadeBase) base.searchSuffix = cfg.empresa.cidadeBase + ", Brasil";
+    base.provider = state.mapProvider || base.provider || "google_road";
     return base;
   }
 
@@ -1022,7 +1040,7 @@
     box.innerHTML = route.rankings.slice(0, 5).map((r, i) => {
       const v = r.vehicle || {};
       const badge = i === 0 ? '<span class="badge ok">RECOMENDADO</span>' : '<span class="badge info">Opção ' + (i + 1) + '</span>';
-      const src = r.toOrigin && r.toOrigin.source === "osrm_openstreetmap" ? "OSM/OSRM por ruas" : "fallback estimado";
+      const src = r.toOrigin && r.toOrigin.source === "osrm_openstreetmap" ? "rota por ruas" : "fallback estimado";
       return `<div class="smart-route-card">
         <div>${badge} <b>${esc(v.placa || v.id || "Veículo")}</b> <span class="muted">${esc(v.apelido || v.tipo || "")}</span></div>
         <div>Até a origem: <b>${esc(r.toOrigin.distanceText || r.kmToOrigin.toFixed(1) + " km")}</b> · <b>${esc(r.toOrigin.durationTrafficText || r.toOrigin.durationText || r.minutesToOrigin + " min")}</b> · fonte: ${esc(src)}</div>
@@ -1058,7 +1076,7 @@
       if (best && !$("callVehicle").value) $("callVehicle").value = best.vehicle.id;
       if (best && $("callTowKm") && !$("callTowKm").value) applyRouteKmToTowPricing();
       renderSmartRouteBox();
-      toast("Rota inteligente calculada por ruas/rodovias quando o OSRM estiver disponível.", "ok");
+      toast("Rota inteligente calculada por ruas/rodovias quando disponível.", "ok");
     } catch (err) {
       $("smartRouteBox").innerHTML = `<span class="danger">${esc(err.message)}</span>`;
       toast(err.message, "danger");
@@ -1118,7 +1136,7 @@
       provider: parsed.provider,
       resolvedAt: parsed.resolvedAt
     }));
-    routeLinkStatus("Link de rota lido com " + parsed.points.length + " ponto(s). O mapa interno vai desenhar por ruas usando OSM/OSRM.", "ok");
+    routeLinkStatus("Link de rota lido com " + parsed.points.length + " ponto(s). O mapa interno vai desenhar por ruas quando disponível.", "ok");
     await calculateSmartRoute();
   }
 
@@ -1140,6 +1158,7 @@
       finalizados: "Finalizados",
       clientes: "Clientes / seguradoras",
       integracoes: "Integrações",
+      assistente: "Assistente IA",
       mapa: "Mapa / Tracker",
       motorista: "Painel motorista",
       financeiro: "Financeiro",
@@ -1150,6 +1169,45 @@
     $("pageTitle").textContent = titles[name] || name;
     document.body.classList.remove("menu-open");
     refreshMaps();
+  }
+
+  function applySidebarState(collapsed) {
+    state.sidebarCollapsed = !!collapsed;
+    document.body.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
+    const btn = $("sidebarToggle");
+    if (btn) {
+      btn.setAttribute("aria-pressed", state.sidebarCollapsed ? "true" : "false");
+      btn.setAttribute("aria-label", state.sidebarCollapsed ? "Expandir menu" : "Recolher menu");
+      btn.title = state.sidebarCollapsed ? "Expandir menu" : "Recolher menu";
+    }
+    writeLocal("jm.sidebar.collapsed", state.sidebarCollapsed ? "true" : "false");
+    setTimeout(() => window.JM.mapa && window.JM.mapa.invalidateAll && window.JM.mapa.invalidateAll(), 180);
+  }
+
+  function syncMapProviderControls() {
+    $all(".mapProviderSelect").forEach((select) => {
+      select.value = state.mapProvider || "google_road";
+    });
+  }
+
+  function setMapProvider(provider) {
+    state.mapProvider = provider || "google_road";
+    writeLocal("jm.map.provider", state.mapProvider);
+    syncMapProviderControls();
+    window.JM_MAP_SETTINGS = activeMapSettings();
+    if (window.JM.mapa && typeof window.JM.mapa.setMapProvider === "function") {
+      window.JM.mapa.setMapProvider(state.mapProvider);
+    }
+    refreshMaps();
+  }
+
+  function bindSidebarAndMapControls() {
+    if ($("sidebarToggle")) $("sidebarToggle").onclick = () => applySidebarState(!state.sidebarCollapsed);
+    applySidebarState(state.sidebarCollapsed);
+    syncMapProviderControls();
+    $all(".mapProviderSelect").forEach((select) => {
+      select.onchange = (e) => setMapProvider(e.target.value);
+    });
   }
 
   function bindNavigation() {
@@ -1256,7 +1314,7 @@
   }
 
   function reportSignature() {
-    return `<div class="report-signature">${SYSTEM_SIGNATURE}</div>`;
+    return SYSTEM_SIGNATURE ? `<div class="report-signature">${SYSTEM_SIGNATURE}</div>` : "";
   }
 
   function gestorAccessAllowedByConfig(user) {
@@ -1576,6 +1634,8 @@
     if ($("driverCalls")) renderDriverPanel();
     renderFinance();
     renderPayments();
+    renderInsuranceClosings();
+    renderAiReview();
     refreshMaps();
   }
 
@@ -1908,8 +1968,40 @@ Rota: ${url}`;
     }
   }
 
+  function callSearchText(call) {
+    const vehicle = state.vehicles[call.vehicleId] || {};
+    const driver = state.users[call.driverId] || {};
+    return statusLower([
+      call.protocolo, call.cliente, call.phone, call.source, call.insurance, call.insuranceProtocol,
+      call.customerPlate, call.customerVehicle, call.originLabel, call.destLabel,
+      call.origem && call.origem.label, call.destino && call.destino.label,
+      vehicle.placa, vehicle.apelido, driver.nome, driver.email
+    ].filter(Boolean).join(" "));
+  }
+
+  function callListFilter(prefix) {
+    return {
+      text: statusLower($(prefix + "Search") && $(prefix + "Search").value || ""),
+      status: $(prefix + "StatusFilter") && $(prefix + "StatusFilter").value || "",
+      source: statusLower($(prefix + "SourceFilter") && $(prefix + "SourceFilter").value || ""),
+      billing: statusLower($(prefix + "BillingFilter") && $(prefix + "BillingFilter").value || "")
+    };
+  }
+
+  function matchesCallListFilter(call, filter) {
+    if (filter.status && currentStatusKey(call) !== filter.status) return false;
+    if (filter.source) {
+      const source = statusLower([call.source, call.insurance, call.origemComercial].filter(Boolean).join(" "));
+      if (!source.includes(filter.source)) return false;
+    }
+    if (filter.billing && !statusLower(call.billingStatus).includes(filter.billing)) return false;
+    if (filter.text && !callSearchText(call).includes(filter.text)) return false;
+    return true;
+  }
+
   function renderCalls() {
-    const rows = visibleRows(state.calls).filter((c) => !isFinalStatus(c)).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    const filter = callListFilter("calls");
+    const rows = visibleRows(state.calls).filter((c) => !isFinalStatus(c) && matchesCallListFilter(c, filter)).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
     if (!rows.length) return $("callsTable").innerHTML = `<p class="muted">Nenhum chamado registrado.</p>`;
     $("callsTable").innerHTML = `<table><thead><tr><th>Protocolo</th><th>Cliente</th><th>Origem/Destino</th><th>Veículo</th><th>Status</th><th>Ações</th></tr></thead><tbody>` + rows.map((c) => {
       const vehicle = state.vehicles[c.vehicleId] || {};
@@ -1917,7 +2009,7 @@ Rota: ${url}`;
       const url = c.routeExternalUrl || c.routeUrl || mapsRouteUrl(c, vehicle);
       const km = routeKm(c, vehicle);
       const metric = c.routeDistanceText || c.routeMetrics && c.routeMetrics.fullRoute && c.routeMetrics.fullRoute.distanceText || c.routeMetrics && c.routeMetrics.bestToOrigin && c.routeMetrics.bestToOrigin.distanceText || (km ? km.toFixed(1).replace(".", ",") + " km" : "Sem rota");
-      const routeBadge = c.routePrecision === "osrm_openstreetmap" || c.routeMetrics && c.routeMetrics.fullRoute && c.routeMetrics.fullRoute.isPrecise ? `<br><span class="badge ok">Rota por ruas OSM</span>` : `<br><span class="badge warn">Fallback/estimada</span>`;
+      const routeBadge = c.routePrecision === "osrm_openstreetmap" || c.routeMetrics && c.routeMetrics.fullRoute && c.routeMetrics.fullRoute.isPrecise ? `<br><span class="badge ok">Rota por ruas</span>` : `<br><span class="badge warn">Fallback/estimada</span>`;
       const tow = c.towPricing || c.deslocamentoGuincho || {};
       const towHtml = tow.ativo ? `<br><span class="badge info">Guincho ${esc(String(tow.kmTotal || 0).replace(".", ","))} km · ${canSeeSensitiveFinance() ? money(tow.total || 0) : "valor restrito"}</span>` : "";
       const adminActions = canOwnCompany() ? `<button class="btn" onclick="JM.app.editCall('${esc(c.id)}')">Editar</button><button class="btn danger" onclick="JM.app.deleteCall('${esc(c.id)}')">Excluir</button>` : "";
@@ -1948,7 +2040,8 @@ Rota: ${url}`;
 
   function renderFinalizedCalls() {
     if (!$("finalizedCallsTable")) return;
-    const rows = visibleRows(state.calls).filter((c) => isFinalStatus(c)).sort((a, b) => String(b.closedAt || b.finalizedAt || b.updatedAt || "").localeCompare(String(a.closedAt || a.finalizedAt || a.updatedAt || "")));
+    const filter = callListFilter("finalized");
+    const rows = visibleRows(state.calls).filter((c) => isFinalStatus(c) && matchesCallListFilter(c, filter)).sort((a, b) => String(b.closedAt || b.finalizedAt || b.updatedAt || "").localeCompare(String(a.closedAt || a.finalizedAt || a.updatedAt || "")));
     $("finalizedCallsTable").innerHTML = rows.length ? `<table><thead><tr><th>Chamado</th><th>Cliente/seguradora</th><th>Fechamento</th><th>Provas</th><th>Ações</th></tr></thead><tbody>` + rows.map((c) => {
       const driver = state.users[c.driverId] || {};
       const vehicle = state.vehicles[c.vehicleId] || {};
@@ -2267,9 +2360,9 @@ Rota: ${url}`;
       const photo = proofPhotoByType(photos, type);
       return photo ? `<div class="photo"><b>${esc(proofPhotoLabel(type))}</b><br><img src="${esc(photo.cloudinaryUrl)}"></div>` : `<div class="photo missing"><b>${esc(proofPhotoLabel(type))}</b><br>Foto não enviada.</div>`;
     };
-    const photoHtml = photos.length ? photos.map((photo) => `<div style="break-inside:avoid;border:1px solid #d1d5db;padding:10px;margin:8px 0"><b>${esc(photo.label || proofPhotoLabel(photo.type) || "Foto")}</b><br><a href="${esc(photo.cloudinaryUrl)}" target="_blank" rel="noopener noreferrer">${esc(photo.cloudinaryUrl)}</a><br><img src="${esc(photo.cloudinaryUrl)}" style="max-width:100%;margin-top:8px"></div>`).join("") : "<p>Sem fotos.</p>";
+    const photoHtml = photos.length ? photos.map((photo) => `<div class="photo"><b>${esc(photo.label || proofPhotoLabel(photo.type) || "Foto")}</b><br><img src="${esc(photo.cloudinaryUrl)}" alt="${esc(photo.label || proofPhotoLabel(photo.type) || "Foto")}"></div>`).join("") : "<p>Sem fotos.</p>";
     const sigUrl = signature.signatureUrl || signature.cloudinaryUrl || "";
-    const sigHtml = sigUrl ? `<p><b>Assinatura:</b> ${esc(signature.name || "")} ${esc(signature.document || "")}<br><b>Aceite:</b> ${esc(signature.acceptedText || "")}</p><img src="${esc(sigUrl)}" style="max-width:100%;border:1px solid #d1d5db">` : signature.refused ? `<p><b>Assinatura não coletada.</b><br><b>Justificativa:</b> ${esc(signature.refusalReason || "")}<br><b>Aceite registrado:</b> ${esc(signature.acceptedText || "")}</p>` : "<p>Sem assinatura.</p>";
+    const sigHtml = sigUrl ? `<p><b>Assinatura:</b> ${esc(signature.name || "")} ${esc(signature.document || "")}<br><b>Aceite:</b> ${esc(signature.acceptedText || "")}</p><img class="signature-img" src="${esc(sigUrl)}" alt="Assinatura">` : signature.refused ? `<p><b>Assinatura não coletada.</b><br><b>Justificativa:</b> ${esc(signature.refusalReason || "")}<br><b>Aceite registrado:</b> ${esc(signature.acceptedText || "")}</p>` : "<p>Sem assinatura.</p>";
     const phaseSignatures = call.phaseSignatures || {};
     const phaseSigHtml = ["retirada", "entrega", "finalizacao"].map((phase) => {
       const item = phaseSignatures[phase] || {};
@@ -2293,7 +2386,7 @@ Rota: ${url}`;
     const headerHtml = `<header class="report-header"><div><h1>Laudo técnico de atendimento</h1><p class="muted">${esc(company.nome || "JM Guinchos")} · ${esc(company.cidadeBase || "")} · ${esc(company.telefoneOperacional || "")}</p></div><div class="report-stamp"><b>${esc(call.protocolo || id)}</b><span>${dateTime(new Date().toISOString())}</span></div></header>`;
     const win = window.open("", "_blank");
     if (!win) return toast("O navegador bloqueou a janela de provas.", "danger");
-    win.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Laudo ${esc(call.protocolo || id)}</title><style>body{font-family:Arial,sans-serif;padding:18px;color:#111827}.report-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;border-bottom:2px solid #0f766e;padding-bottom:12px;margin-bottom:14px}.report-header h1{margin:0 0 4px;font-size:24px}.report-stamp{text-align:right;border:1px solid #d1d5db;border-radius:8px;padding:10px;min-width:160px}.report-stamp span{display:block;color:#64748b;font-size:12px;margin-top:4px}h2{font-size:15px;margin:18px 0 8px;color:#0f766e}.muted{color:#64748b}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.photo{break-inside:avoid;border:1px solid #d1d5db;border-radius:8px;padding:8px;margin:6px 0;background:#fff}.photo img{width:100%;height:118px;object-fit:cover;object-position:center;margin-top:6px;border-radius:6px}.missing{color:#991b1b;background:#fef2f2}.report-context{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.report-context div{border:1px solid #e5e7eb;border-radius:8px;padding:8px}@media print{button{display:none}.photo{page-break-inside:avoid}.grid{grid-template-columns:repeat(4,minmax(0,1fr))}.photo img{height:92px}body{padding:8mm}.report-header{position:running(reportHeader)}}@page{margin:10mm}</style></head><body>${headerHtml}<div class="report-context"><div><b>Cliente</b><br>${esc(call.cliente || "-")}</div><div><b>Seguradora</b><br>${esc(call.insurance || call.source || "-")}</div><div><b>Placa</b><br>${esc(call.customerPlate || "-")}</div></div><h2>Checklist por etapa</h2><ul>${checklistHtml}</ul><p>${esc(checklist.notes || "")}</p>${damageHtml}${stageEvidenceHtml}<h2>Assinatura ou justificativa por fase</h2><div class="grid">${phaseSigHtml}</div><h2>Assinatura geral de compatibilidade</h2>${sigHtml}<h2>Fotos gerais</h2>${photoHtml}<p class="muted">${SYSTEM_SIGNATURE}</p></body></html>`);
+    win.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Laudo ${esc(call.protocolo || id)}</title><style>body{font-family:Arial,sans-serif;padding:18px;color:#111827}.report-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;border-bottom:2px solid #0f766e;padding-bottom:12px;margin-bottom:14px}.report-header h1{margin:0 0 4px;font-size:24px}.report-stamp{text-align:right;border:1px solid #d1d5db;border-radius:8px;padding:10px;min-width:160px}.report-stamp span{display:block;color:#64748b;font-size:12px;margin-top:4px}h2{font-size:15px;margin:18px 0 8px;color:#0f766e}.muted{color:#64748b}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.photo{break-inside:avoid;border:1px solid #d1d5db;border-radius:8px;padding:8px;margin:6px 0;background:#fff}.photo img{width:100%;height:118px;object-fit:cover;object-position:center;margin-top:6px;border-radius:6px}.signature-img,.photo .signature-img{width:100%;max-width:360px;height:92px;object-fit:contain;background:#fff;border:1px solid #d1d5db;border-radius:6px}.missing{color:#991b1b;background:#fef2f2}.report-context{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.report-context div{border:1px solid #e5e7eb;border-radius:8px;padding:8px}@media print{button{display:none}.photo{page-break-inside:avoid}.grid{grid-template-columns:repeat(4,minmax(0,1fr))}.photo img{height:92px}.signature-img{height:82px}body{padding:8mm}.report-header{position:running(reportHeader)}}@page{margin:10mm}</style></head><body>${headerHtml}<div class="report-context"><div><b>Cliente</b><br>${esc(call.cliente || "-")}</div><div><b>Seguradora</b><br>${esc(call.insurance || call.source || "-")}</div><div><b>Placa</b><br>${esc(call.customerPlate || "-")}</div></div><h2>Checklist por etapa</h2><ul>${checklistHtml}</ul><p>${esc(checklist.notes || "")}</p>${damageHtml}${stageEvidenceHtml}<h2>Assinatura ou justificativa por fase</h2><div class="grid">${phaseSigHtml}</div><h2>Assinatura geral de compatibilidade</h2>${sigHtml}<h2>Fotos gerais</h2>${photoHtml}${SYSTEM_SIGNATURE ? `<p class="muted">${SYSTEM_SIGNATURE}</p>` : ""}</body></html>`);
     win.document.close();
   }
 
@@ -2760,6 +2853,7 @@ Rota: ${url}`;
     setValue("callClaim", normalized.claimNumber || "");
     setValue("callPolicyNumber", normalized.policyNumber || "");
     setValue("callCustomerPlate", normalized.customerPlate || "");
+    setValue("callPrice", normalized.amount || "");
     setValue("callSlaLimit", normalized.slaLimitAt || "");
     setValue("callOriginLabel", normalized.originText || "");
     setValue("callDestLabel", normalized.destinationText || "");
@@ -3105,6 +3199,301 @@ Rota: ${url}`;
     toast("Despesa enviada para aprovação já vinculada ao chamado/veículo.", "ok");
   });
 
+  function aiSetStatus(text, tone) {
+    const el = $("aiStatus");
+    if (!el) return;
+    el.textContent = text || "";
+    el.className = "small " + (tone || "muted");
+  }
+
+  function previewAiFile() {
+    const file = $("aiSourceFile") && $("aiSourceFile").files && $("aiSourceFile").files[0];
+    const box = $("aiFilePreview");
+    if (!box) return;
+    if (!file) {
+      box.innerHTML = "Nenhum arquivo selecionado.";
+      return;
+    }
+    if (/^image\//i.test(file.type)) {
+      const url = URL.createObjectURL(file);
+      box.innerHTML = `<img src="${esc(url)}" alt="Print enviado"><span>${esc(file.name)} · ${Math.round(file.size / 1024)} KB</span>`;
+      return;
+    }
+    box.textContent = file.name + " · " + Math.round(file.size / 1024) + " KB";
+  }
+
+  async function extractAiFileText() {
+    const file = $("aiSourceFile") && $("aiSourceFile").files && $("aiSourceFile").files[0];
+    if (!file) return aiSetStatus("Selecione um print antes de ler.", "warn");
+    if (!/^image\//i.test(file.type)) return aiSetStatus("Leitura automática aceita imagens. Para PDF, cole o texto no campo.", "warn");
+    const btn = $("btnAiExtract");
+    setButtonBusy(btn, true, "Lendo...");
+    aiSetStatus("Lendo print no navegador. Pode levar alguns segundos.", "muted");
+    try {
+      const tesseract = await import("https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.esm.min.js");
+      const worker = await tesseract.createWorker("por+eng");
+      const result = await worker.recognize(file);
+      await worker.terminate();
+      const text = result && result.data && result.data.text || "";
+      const current = $("aiSourceText").value.trim();
+      $("aiSourceText").value = [current, text.trim()].filter(Boolean).join("\n\n");
+      aiSetStatus(text.trim() ? "Texto extraído. Revise e gere os rascunhos." : "Não consegui identificar texto útil no print.", text.trim() ? "ok" : "warn");
+    } catch (err) {
+      console.warn("Falha OCR", err);
+      aiSetStatus("Não foi possível ler o print automaticamente. Cole o texto e gere os rascunhos.", "warn");
+    } finally {
+      setButtonBusy(btn, false);
+    }
+  }
+
+  function aiField(text, labels) {
+    const lines = String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    for (const label of labels) {
+      const re = new RegExp("^\\s*" + label + "\\s*[:\\-]\\s*(.+)$", "i");
+      const found = lines.find((line) => re.test(line));
+      if (found) return found.replace(re, "$1").trim();
+    }
+    return "";
+  }
+
+  function aiMatch(text, regex) {
+    const m = String(text || "").match(regex);
+    return m ? String(m[1] || m[0] || "").trim() : "";
+  }
+
+  function aiAmount(text) {
+    const found = aiMatch(text, /(?:valor|total|pre[cç]o|R\$)\s*[:\-]?\s*(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:[.,]\d{2})?)/i);
+    return found ? parseMoney(found) : 0;
+  }
+
+  function buildAiDrafts(text) {
+    const raw = String(text || "").trim();
+    if (!raw) return [];
+    const lower = statusLower(raw);
+    const amount = aiAmount(raw);
+    const plate = plateKey(aiField(raw, ["placa", "veiculo", "veículo"]) || aiMatch(raw, /\b([A-Z]{3}[0-9][A-Z0-9][0-9]{2}|[A-Z]{3}[0-9]{4})\b/i));
+    const phone = aiField(raw, ["telefone", "whatsapp", "celular"]) || aiMatch(raw, /(?:\+?55\s*)?\(?\d{2}\)?\s*9?\d{4}[-\s]?\d{4}/);
+    const client = aiField(raw, ["cliente", "nome", "segurado", "condutor"]) || aiMatch(raw, /cliente\s*[:\-]\s*([^\n]+)/i);
+    const insurance = aiField(raw, ["seguradora", "assistencia", "assistência", "origem"]) || (/segur/i.test(lower) ? "Seguradora" : "");
+    const protocol = aiField(raw, ["protocolo", "acionamento", "os", "ordem"]) || aiMatch(raw, /(?:protocolo|acionamento|os)\s*[:\-]?\s*([A-Z0-9./-]+)/i);
+    const origin = aiField(raw, ["origem", "local", "endereco", "endereço", "retirada"]);
+    const destination = aiField(raw, ["destino", "entrega", "base"]);
+    const claim = aiField(raw, ["sinistro", "claim"]);
+    const policy = aiField(raw, ["apolice", "apólice"]);
+    const drafts = [];
+    if (/chamado|guincho|sinistro|apolice|apólice|origem|destino|retirada|seguradora|assist[eê]ncia/.test(lower)) {
+      drafts.push({
+        kind: "call",
+        title: "Rascunho de chamado",
+        rawText: raw,
+        data: { client, phone, insurance, protocol, origin, destination, plate, claim, policy, amount }
+      });
+    }
+    if (/despesa|combust[ií]vel|ped[aá]gio|manuten[cç][aã]o|nota|recibo|oficina|estacionamento|lavagem/.test(lower)) {
+      drafts.push({
+        kind: "expense",
+        title: "Rascunho de despesa",
+        rawText: raw,
+        data: {
+          description: aiField(raw, ["descricao", "descrição", "item"]) || "Despesa lançada por IA",
+          category: aiField(raw, ["categoria", "tipo"]) || "Despesa operacional",
+          amount,
+          plate,
+          status: "Pendente"
+        }
+      });
+    }
+    if (/pagamento|fatura|boleto|pix|receber|cobran[cç]a|lan[cç]amento|nf|nota fiscal/.test(lower) && !/despesa|recibo de despesa/.test(lower)) {
+      drafts.push({
+        kind: "finance",
+        title: "Rascunho financeiro",
+        rawText: raw,
+        data: {
+          type: /pagar|despesa|sa[ií]da/.test(lower) ? "saida" : "entrada",
+          description: aiField(raw, ["descricao", "descrição", "historico", "histórico"]) || "Lançamento criado por IA",
+          category: aiField(raw, ["categoria", "tipo"]) || "Operacional",
+          billingParty: insurance || client || aiField(raw, ["pagador", "recebedor"]),
+          status: /recebido|pago|quitado/.test(lower) ? "Recebido" : "A receber",
+          amount
+        }
+      });
+    }
+    if (!drafts.length) {
+      drafts.push({
+        kind: "note",
+        title: "Texto interpretado",
+        rawText: raw,
+        data: { description: raw.slice(0, 180), amount }
+      });
+    }
+    return drafts;
+  }
+
+  function analyzeAiInput() {
+    const text = $("aiSourceText") && $("aiSourceText").value || "";
+    state.aiDrafts = buildAiDrafts(text);
+    renderAiReview();
+    aiSetStatus(state.aiDrafts.length ? "Rascunhos prontos para revisão." : "Cole um texto ou leia um print para gerar rascunhos.", state.aiDrafts.length ? "ok" : "warn");
+  }
+
+  function aiInput(id, label, value, wide) {
+    return `<div class="${wide ? "wide" : ""}"><label>${esc(label)}</label><input id="${esc(id)}" value="${esc(value || "")}"></div>`;
+  }
+
+  function renderAiReview() {
+    const box = $("aiReviewBox");
+    if (!box) return;
+    const drafts = state.aiDrafts || [];
+    if (!drafts.length) {
+      box.innerHTML = `<p class="muted">Nenhum rascunho gerado ainda.</p>`;
+      return;
+    }
+    box.innerHTML = drafts.map((draft, index) => {
+      const d = draft.data || {};
+      let fields = "";
+      if (draft.kind === "call") {
+        fields = [
+          aiInput(`ai_${index}_client`, "Cliente", d.client),
+          aiInput(`ai_${index}_phone`, "WhatsApp", d.phone),
+          aiInput(`ai_${index}_insurance`, "Seguradora", d.insurance),
+          aiInput(`ai_${index}_protocol`, "Protocolo", d.protocol),
+          aiInput(`ai_${index}_plate`, "Placa", d.plate),
+          aiInput(`ai_${index}_amount`, "Valor", d.amount ? String(d.amount).replace(".", ",") : ""),
+          aiInput(`ai_${index}_origin`, "Origem", d.origin, true),
+          aiInput(`ai_${index}_destination`, "Destino", d.destination, true)
+        ].join("");
+      } else if (draft.kind === "finance" || draft.kind === "expense") {
+        fields = [
+          `<div><label>Tipo</label><select id="ai_${index}_type"><option value="entrada"${d.type === "entrada" ? " selected" : ""}>Entrada</option><option value="saida"${d.type === "saida" || draft.kind === "expense" ? " selected" : ""}>Saída</option></select></div>`,
+          aiInput(`ai_${index}_amount`, "Valor", d.amount ? String(d.amount).replace(".", ",") : ""),
+          aiInput(`ai_${index}_description`, "Descrição", d.description, true),
+          aiInput(`ai_${index}_category`, "Categoria", d.category),
+          aiInput(`ai_${index}_party`, "Cliente/seguradora", d.billingParty),
+          `<div><label>Status</label><select id="ai_${index}_status"><option${d.status === "A receber" ? " selected" : ""}>A receber</option><option${d.status === "Recebido" ? " selected" : ""}>Recebido</option><option${d.status === "Pendente" ? " selected" : ""}>Pendente</option><option${d.status === "Pago" ? " selected" : ""}>Pago</option></select></div>`
+        ].join("");
+      } else {
+        fields = `<div class="wide"><label>Observação</label><textarea id="ai_${index}_description">${esc(d.description || draft.rawText || "")}</textarea></div>`;
+      }
+      return `<div class="ai-draft-card">
+        <div class="ai-draft-head">
+          <div><h3>${esc(draft.title)}</h3><p class="muted small">Revise os campos antes de aplicar ou salvar.</p></div>
+          <span class="badge info">${esc(draft.kind)}</span>
+        </div>
+        <div class="form-grid">${fields}</div>
+        <div class="actions" style="margin-top:10px">
+          ${draft.kind !== "note" ? `<button class="btn" onclick="JM.app.applyAiDraft(${index})">Aplicar no formulário</button>` : ""}
+          <button class="btn good" onclick="JM.app.saveAiDraft(${index})">Salvar revisado</button>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  function applyAiDraft(index) {
+    const draft = state.aiDrafts[index];
+    if (!draft) return;
+    if (draft.kind === "call") {
+      showView("chamados");
+      setValue("callClient", $(`ai_${index}_client`).value);
+      setValue("callPhone", $(`ai_${index}_phone`).value);
+      setValue("callSource", "Seguradora");
+      setValue("callInsurance", $(`ai_${index}_insurance`).value);
+      setValue("callInsuranceProtocol", $(`ai_${index}_protocol`).value);
+      setValue("callCustomerPlate", $(`ai_${index}_plate`).value);
+      setValue("callPrice", $(`ai_${index}_amount`).value);
+      setValue("callOriginLabel", $(`ai_${index}_origin`).value);
+      setValue("callDestLabel", $(`ai_${index}_destination`).value);
+      toast("Rascunho aplicado no formulário. Valide a rota antes de registrar.", "ok");
+      return;
+    }
+    showView("financeiro");
+    setValue("finType", $(`ai_${index}_type`).value);
+    setValue("finDesc", $(`ai_${index}_description`).value);
+    setValue("finAmount", $(`ai_${index}_amount`).value);
+    setValue("finCategory", $(`ai_${index}_category`).value);
+    setValue("finStatus", $(`ai_${index}_status`).value);
+    toast("Rascunho aplicado no financeiro. Revise e salve.", "ok");
+  }
+
+  async function saveAiDraft(index) {
+    const draft = state.aiDrafts[index];
+    if (!draft) return toast("Rascunho não encontrado.", "danger");
+    const now = new Date().toISOString();
+    if (draft.kind === "call") {
+      if (!canOperateCalls()) return toast("Sem permissão para salvar chamado.", "danger");
+      const payload = {
+        source: $(`ai_${index}_insurance`).value.trim() || "Assistente IA",
+        sourceName: $(`ai_${index}_insurance`).value.trim() || "Assistente IA",
+        sourceType: "ai_assistant",
+        protocol: $(`ai_${index}_protocol`).value.trim(),
+        customerName: $(`ai_${index}_client`).value.trim(),
+        customerPhone: $(`ai_${index}_phone`).value.trim(),
+        customerPlate: plateKey($(`ai_${index}_plate`).value),
+        originText: $(`ai_${index}_origin`).value.trim(),
+        destinationText: $(`ai_${index}_destination`).value.trim(),
+        status: "novo",
+        normalizedCall: {
+          source: "Seguradora",
+          insurance: $(`ai_${index}_insurance`).value.trim(),
+          insuranceProtocol: $(`ai_${index}_protocol`).value.trim(),
+          customerName: $(`ai_${index}_client`).value.trim(),
+          customerPhone: $(`ai_${index}_phone`).value.trim(),
+          customerPlate: plateKey($(`ai_${index}_plate`).value),
+          originText: $(`ai_${index}_origin`).value.trim(),
+          destinationText: $(`ai_${index}_destination`).value.trim(),
+          amount: parseMoney($(`ai_${index}_amount`).value),
+          rawText: draft.rawText || ""
+        },
+        rawPayload: draft.rawText || "",
+        createdAt: now,
+        createdBy: state.user.uid,
+        updatedAt: now,
+        updatedBy: state.user.uid
+      };
+      await db.collection("integrationInbox").add(payload);
+      toast("Rascunho salvo na fila de integrações para validar e gerar chamado.", "ok");
+      showView("integracoes");
+      return;
+    }
+    if (draft.kind === "note") {
+      if (!canOperateCalls()) return toast("Sem permissão para salvar anotação.", "danger");
+      await db.collection("integrationInbox").add({
+        source: "Assistente IA",
+        sourceName: "Assistente IA",
+        sourceType: "ai_note",
+        status: "novo",
+        rawPayload: draft.rawText || ($(`ai_${index}_description`) && $(`ai_${index}_description`).value || ""),
+        normalizedCall: { rawText: draft.rawText || "" },
+        createdAt: now,
+        createdBy: state.user.uid,
+        updatedAt: now,
+        updatedBy: state.user.uid
+      });
+      toast("Texto salvo na fila para triagem.", "ok");
+      showView("integracoes");
+      return;
+    }
+    if (!canManageFinance()) return toast("Sem permissão para salvar financeiro.", "danger");
+    const type = draft.kind === "expense" ? "saida" : ($(`ai_${index}_type`) && $(`ai_${index}_type`).value || "entrada");
+    await db.collection("transactions").add({
+      module: "ai_assistant",
+      sourceType: draft.kind === "expense" ? "ai_expense" : "ai_finance",
+      type,
+      date: todayInput(),
+      description: $(`ai_${index}_description`).value.trim(),
+      amount: parseMoney($(`ai_${index}_amount`).value),
+      status: $(`ai_${index}_status`) ? $(`ai_${index}_status`).value : (type === "saida" ? "Pendente" : "A receber"),
+      category: $(`ai_${index}_category`) ? $(`ai_${index}_category`).value.trim() : "Assistente IA",
+      billingParty: $(`ai_${index}_party`) ? $(`ai_${index}_party`).value.trim() : "",
+      aiReviewed: true,
+      rawPayload: draft.rawText || "",
+      createdAt: now,
+      createdBy: state.user.uid,
+      updatedAt: now,
+      updatedBy: state.user.uid
+    });
+    toast(draft.kind === "expense" ? "Despesa salva no financeiro." : "Lançamento financeiro salvo.", "ok");
+  }
+
   function renderFinance() {
     if (!$("financeTable")) return;
     if (!canManageFinance()) {
@@ -3141,7 +3530,7 @@ Rota: ${url}`;
     });
     const entradas = rows.filter((t) => t.type === "entrada" && t.module !== "payments_shadow").reduce((s, t) => s + Number(t.amount || 0), 0);
     const saidas = rows.filter((t) => t.type === "saida").reduce((s, t) => s + Number(t.amount || 0), 0);
-    const toBill = visibleRows(state.calls).filter((c) => Number(c.valor || 0) > 0 && (isFinalStatus(c.statusKey || c.status) || /faturar|receber/i.test(String(c.billingStatus || ""))) && !c.receivableTransactionId);
+    const toBill = visibleRows(state.calls).filter((c) => Number(c.valor || 0) > 0 && (isFinalStatus(c.statusKey || c.status) || /faturar|receber/i.test(String(c.billingStatus || ""))) && !c.receivableTransactionId && !c.closingId);
     const billingQueue = toBill.length ? `<div class="workflow-box warn"><b>Chamados finalizados/a faturar sem financeiro oficial</b><div class="table-wrap"><table><thead><tr><th>Chamado</th><th>Cliente/seguradora</th><th>Veículo</th><th>Valor</th><th>Ação</th></tr></thead><tbody>${toBill.map((c) => {
       const vehicle = state.vehicles[c.vehicleId] || {};
       return `<tr><td>${esc(c.protocolo || c.id)}</td><td>${esc(callDisplayName(c))}</td><td>${esc(vehicle.placa || c.vehicleId || "-")}</td><td><b>${money(c.valor || 0)}</b></td><td><button class="btn good" onclick="JM.app.generateCallReceivable('${esc(c.id)}')">Gerar cobrança</button></td></tr>`;
@@ -3210,8 +3599,27 @@ Rota: ${url}`;
       $("paymentsTable").innerHTML = `<p class="muted">Gestão de pagamentos disponível somente para gestor/dono e financeiro.</p>`;
       return;
     }
+    const filter = {
+      text: statusLower($("paymentSearch") && $("paymentSearch").value || ""),
+      type: $("paymentTypeFilter") && $("paymentTypeFilter").value || "",
+      status: statusLower($("paymentStatusFilter") && $("paymentStatusFilter").value || "")
+    };
     const rows = visibleRows(state.transactions)
       .filter((t) => t.module === "payments" || t.customerId || t.billingParty)
+      .filter((t) => {
+        if (filter.type && t.type !== filter.type) return false;
+        if (filter.status && !statusLower(t.status).includes(filter.status)) return false;
+        if (filter.text) {
+          const customer = state.customers[t.customerId] || {};
+          const call = state.calls[t.callId] || {};
+          const haystack = statusLower([
+            t.description, t.invoiceNumber, t.category, t.billingParty, t.status,
+            customer.name, call.protocolo, call.cliente, call.insurance, t.callId
+          ].filter(Boolean).join(" "));
+          if (!haystack.includes(filter.text)) return false;
+        }
+        return true;
+      })
       .sort((a, b) => String(b.dueDate || b.date || b.createdAt || "").localeCompare(String(a.dueDate || a.date || a.createdAt || "")));
     const receber = rows.filter((t) => t.type === "entrada" && !statusMeansReceived(t.status)).reduce((s, t) => s + Number(t.balanceAmount != null ? t.balanceAmount : t.amount || 0), 0);
     const pagar = rows.filter((t) => t.type === "saida" && !statusMeansReceived(t.status)).reduce((s, t) => s + Number(t.amount || 0), 0);
@@ -3230,6 +3638,158 @@ Rota: ${url}`;
         <td class="row-actions"><button class="btn" onclick="JM.app.editPayment('${esc(p.id)}')">Editar</button><button class="btn danger" onclick="JM.app.deleteTransaction('${esc(p.id)}')">Excluir</button></td>
       </tr>`;
     }).join("") + `</tbody></table>` : `<p class="muted">Nenhum pagamento cadastrado para clientes/seguradoras.</p>`;
+  }
+
+  function closingMonth(call) {
+    return String(call.closedAt || call.finalizedAt || call.updatedAt || call.createdAt || todayInput()).slice(0, 7) || todayInput().slice(0, 7);
+  }
+
+  function closingParty(call) {
+    return call.insurance || call.billingParty || callDisplayName(call) || "Sem seguradora";
+  }
+
+  function closingCandidate(call) {
+    if (!call || call.deletedAt || !isFinalStatus(call)) return false;
+    if (!Number(call.valor || 0)) return false;
+    if (call.closingId || statusMeansReceived(call.billingStatus)) return false;
+    const party = closingParty(call);
+    return !!String(party || "").trim();
+  }
+
+  function buildInsuranceClosingGroups() {
+    const search = statusLower($("closingSearch") && $("closingSearch").value || "");
+    const monthFilter = $("closingMonthFilter") && $("closingMonthFilter").value || "";
+    const groups = {};
+    visibleRows(state.calls).filter(closingCandidate).forEach((call) => {
+      const month = closingMonth(call);
+      if (monthFilter && month !== monthFilter) return;
+      if (search && !callSearchText(call).includes(search) && !statusLower(closingParty(call)).includes(search)) return;
+      const party = closingParty(call);
+      const key = uidSafe(statusLower(party) + "-" + month);
+      if (!groups[key]) {
+        groups[key] = { key, party, month, calls: [], total: 0, customerId: call.customerId || "", proofPending: 0 };
+      }
+      groups[key].calls.push(call);
+      groups[key].total += Number(call.valor || 0);
+      if (!callProofComplete(call)) groups[key].proofPending += 1;
+      if (!groups[key].customerId && call.customerId) groups[key].customerId = call.customerId;
+    });
+    state.insuranceClosingGroups = groups;
+    return Object.values(groups).sort((a, b) => String(b.month).localeCompare(String(a.month)) || String(a.party).localeCompare(String(b.party)));
+  }
+
+  function renderInsuranceClosings() {
+    if (!$("insuranceClosingTable")) return;
+    if (!canManageFinance()) {
+      $("insuranceClosingSummary").innerHTML = "";
+      $("insuranceClosingTable").innerHTML = `<p class="muted">Fechamento disponível somente para gestor/dono e financeiro.</p>`;
+      $("insuranceClosingReview").innerHTML = "";
+      return;
+    }
+    const groups = buildInsuranceClosingGroups();
+    const total = groups.reduce((sum, group) => sum + group.total, 0);
+    const callsCount = groups.reduce((sum, group) => sum + group.calls.length, 0);
+    $("insuranceClosingSummary").innerHTML = `<div class="finance-summary"><span>Seguradoras <b>${groups.length}</b></span><span>Chamados <b>${callsCount}</b></span><span>Total a fechar <b>${money(total)}</b></span></div>`;
+    $("insuranceClosingTable").innerHTML = groups.length ? `<table><thead><tr><th>Seguradora</th><th>Mês</th><th>Chamados</th><th>Provas</th><th>Total</th><th>Ações</th></tr></thead><tbody>` + groups.map((group) => {
+      const pending = group.proofPending ? `<span class="badge warn">${group.proofPending} pendente(s)</span>` : `<span class="badge ok">completo</span>`;
+      const sample = group.calls.slice(0, 4).map((call) => call.protocolo || call.id).join(", ");
+      return `<tr>
+        <td><b>${esc(group.party)}</b><br><span class="muted small">${esc(sample)}${group.calls.length > 4 ? "..." : ""}</span></td>
+        <td>${esc(group.month)}</td>
+        <td>${group.calls.length}</td>
+        <td>${pending}</td>
+        <td><b>${money(group.total)}</b></td>
+        <td class="row-actions"><button class="btn primary" onclick="JM.app.previewInsuranceClosing('${esc(group.key)}')">Revisar</button></td>
+      </tr>`;
+    }).join("") + `</tbody></table>` : `<p class="muted">Nenhum chamado finalizado pendente de fechamento para os filtros atuais.</p>`;
+  }
+
+  function previewInsuranceClosing(key) {
+    if (!canManageFinance()) return toast("Sem permissão para fechar seguradoras.", "danger");
+    const group = state.insuranceClosingGroups[key] || buildInsuranceClosingGroups().find((row) => row.key === key);
+    const box = $("insuranceClosingReview");
+    if (!group || !box) return toast("Fechamento não encontrado no filtro atual.", "danger");
+    const rows = group.calls.map((call) => {
+      const vehicle = state.vehicles[call.vehicleId] || {};
+      return `<tr><td>${esc(call.protocolo || call.id)}<br><span class="muted small">${esc(call.cliente || "")}</span></td><td>${esc(vehicle.placa || call.customerPlate || "-")}</td><td>${proofStatusBadge(call)}</td><td><b>${money(call.valor || 0)}</b></td><td><button class="btn" onclick="JM.app.selectCallDossier('${esc(call.id)}')">Abrir</button></td></tr>`;
+    }).join("");
+    box.innerHTML = `<div class="closing-card">
+      <div class="closing-card-header">
+        <div><h3>Revisão do fechamento</h3><p class="muted small">${esc(group.party)} · ${esc(group.month)} · ${group.calls.length} chamado(s)</p></div>
+        <span class="badge ${group.proofPending ? "warn" : "ok"}">${group.proofPending ? group.proofPending + " prova(s) pendente(s)" : "pronto"}</span>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Chamado</th><th>Veículo</th><th>Provas</th><th>Valor</th><th>Ação</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="actions" style="justify-content:space-between;margin-top:12px">
+        <b>Total: ${money(group.total)}</b>
+        <button class="btn good" onclick="JM.app.saveInsuranceClosing('${esc(group.key)}')">Salvar fechamento</button>
+      </div>
+    </div>`;
+    box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  async function saveInsuranceClosing(key) {
+    if (!canManageFinance()) return toast("Sem permissão para salvar fechamento.", "danger");
+    const group = state.insuranceClosingGroups[key] || buildInsuranceClosingGroups().find((row) => row.key === key);
+    if (!group) return toast("Fechamento não encontrado.", "danger");
+    if (!group.calls.length) return toast("Nenhum chamado no fechamento.", "warn");
+    if (group.proofPending && !window.confirm("Existem provas pendentes neste fechamento. Deseja salvar mesmo assim?")) return;
+    const now = new Date().toISOString();
+    const callsWithoutReceivable = group.calls.filter((call) => !call.receivableTransactionId);
+    const newAmount = callsWithoutReceivable.reduce((sum, call) => sum + Number(call.valor || 0), 0);
+    const closingPayload = {
+      module: "insurance_closing",
+      sourceType: "insurance_closing",
+      type: "entrada",
+      date: todayInput(),
+      dueDate: todayInput(),
+      description: `Fechamento ${group.party} - ${group.month}`,
+      amount: newAmount || group.total,
+      paidAmount: 0,
+      balanceAmount: newAmount || group.total,
+      status: "A receber",
+      paymentMethod: "Faturamento seguradora",
+      category: "Fechamento seguradora",
+      customerId: group.customerId || "",
+      billingParty: group.party,
+      callIds: group.calls.map((call) => call.id),
+      protocol: group.calls.map((call) => call.protocolo || call.id).join(", "),
+      groupedTotal: group.total,
+      createdAt: now,
+      createdBy: state.user.uid,
+      updatedAt: now,
+      updatedBy: state.user.uid
+    };
+    const ref = callsWithoutReceivable.length
+      ? await db.collection("transactions").add(closingPayload)
+      : { id: uidSafe("fechamento-" + group.party + "-" + group.month + "-" + Date.now()) };
+    const batch = db.batch();
+    group.calls.forEach((call) => {
+      batch.set(db.collection("calls").doc(call.id), {
+        closingId: ref.id,
+        closingMonth: group.month,
+        closingParty: group.party,
+        closingStatus: "fechado",
+        billingStatus: "fechado_a_receber",
+        financePending: false,
+        updatedAt: now,
+        updatedBy: state.user.uid,
+        timeline: arrayUnion({ at: now, by: personName(), text: "Chamado incluído no fechamento " + group.party + " - " + group.month })
+      }, { merge: true });
+      if (call.receivableTransactionId) {
+        batch.set(db.collection("transactions").doc(call.receivableTransactionId), {
+          closingId: ref.id,
+          closingMonth: group.month,
+          closingParty: group.party,
+          billingParty: group.party,
+          category: "Fechamento seguradora",
+          updatedAt: now,
+          updatedBy: state.user.uid
+        }, { merge: true });
+      }
+    });
+    await batch.commit();
+    $("insuranceClosingReview").innerHTML = "";
+    toast("Fechamento salvo no financeiro e vinculado aos chamados.", "ok");
   }
 
   function fillPaymentFromCall() {
@@ -3434,6 +3994,17 @@ Rota: ${url}`;
     });
     if ($("callTowType")) $("callTowType").onchange = updateTowDefaultsByType;
     if ($("btnSyncTrackerNow")) $("btnSyncTrackerNow").onclick = () => syncTrackerNow(true);
+    if ($("aiSourceFile")) $("aiSourceFile").onchange = previewAiFile;
+    if ($("btnAiExtract")) $("btnAiExtract").onclick = extractAiFileText;
+    if ($("btnAiAnalyze")) $("btnAiAnalyze").onclick = analyzeAiInput;
+    if ($("btnAiClear")) $("btnAiClear").onclick = () => {
+      if ($("aiSourceFile")) $("aiSourceFile").value = "";
+      if ($("aiSourceText")) $("aiSourceText").value = "";
+      state.aiDrafts = [];
+      previewAiFile();
+      renderAiReview();
+      aiSetStatus("O salvamento só acontece depois da revisão.", "muted");
+    };
     if ($("callCancelEdit")) $("callCancelEdit").onclick = resetCallForm;
     if ($("teamCancelEdit")) $("teamCancelEdit").onclick = resetTeamForm;
     if ($("financeCancelEdit")) $("financeCancelEdit").onclick = resetFinanceForm;
@@ -3442,6 +4013,22 @@ Rota: ${url}`;
     if ($("maintenanceCancelEdit")) $("maintenanceCancelEdit").onclick = resetMaintenanceForm;
     if ($("payCall")) $("payCall").onchange = fillPaymentFromCall;
     if ($("finCall")) $("finCall").onchange = fillFinanceFromCall;
+    ["callsSearch", "callsStatusFilter", "callsSourceFilter"].forEach((id) => {
+      if ($(id)) $(id).oninput = renderCalls;
+      if ($(id)) $(id).onchange = renderCalls;
+    });
+    if ($("callsClearFilters")) $("callsClearFilters").onclick = () => {
+      ["callsSearch", "callsStatusFilter", "callsSourceFilter"].forEach((id) => { if ($(id)) $(id).value = ""; });
+      renderCalls();
+    };
+    ["finalizedSearch", "finalizedBillingFilter"].forEach((id) => {
+      if ($(id)) $(id).oninput = renderFinalizedCalls;
+      if ($(id)) $(id).onchange = renderFinalizedCalls;
+    });
+    if ($("finalizedClearFilters")) $("finalizedClearFilters").onclick = () => {
+      ["finalizedSearch", "finalizedBillingFilter"].forEach((id) => { if ($(id)) $(id).value = ""; });
+      renderFinalizedCalls();
+    };
     ["financeSearch", "financeTypeFilter", "financeStatusFilter", "financeStartDate", "financeEndDate"].forEach((id) => {
       if ($(id)) $(id).oninput = renderFinance;
       if ($(id)) $(id).onchange = renderFinance;
@@ -3452,10 +4039,28 @@ Rota: ${url}`;
       });
       renderFinance();
     };
+    ["paymentSearch", "paymentTypeFilter", "paymentStatusFilter"].forEach((id) => {
+      if ($(id)) $(id).oninput = renderPayments;
+      if ($(id)) $(id).onchange = renderPayments;
+    });
+    if ($("paymentClearFilters")) $("paymentClearFilters").onclick = () => {
+      ["paymentSearch", "paymentTypeFilter", "paymentStatusFilter"].forEach((id) => { if ($(id)) $(id).value = ""; });
+      renderPayments();
+    };
+    ["closingSearch", "closingMonthFilter"].forEach((id) => {
+      if ($(id)) $(id).oninput = () => { renderInsuranceClosings(); if ($("insuranceClosingReview")) $("insuranceClosingReview").innerHTML = ""; };
+      if ($(id)) $(id).onchange = () => { renderInsuranceClosings(); if ($("insuranceClosingReview")) $("insuranceClosingReview").innerHTML = ""; };
+    });
+    if ($("closingClearFilters")) $("closingClearFilters").onclick = () => {
+      ["closingSearch", "closingMonthFilter"].forEach((id) => { if ($(id)) $(id).value = ""; });
+      if ($("insuranceClosingReview")) $("insuranceClosingReview").innerHTML = "";
+      renderInsuranceClosings();
+    };
   }
 
   function boot() {
     bindNavigation();
+    bindSidebarAndMapControls();
     bindRouteButtons();
     bindInputMasks();
     renderSmartRouteBox();
@@ -3500,6 +4105,8 @@ Rota: ${url}`;
     editTransaction,
     editPayment,
     generateCallReceivable,
+    previewInsuranceClosing,
+    saveInsuranceClosing,
     deleteTransaction,
     editCustomer,
     deleteCustomer,
@@ -3510,6 +4117,8 @@ Rota: ${url}`;
     approveExpense,
     rejectExpense,
     applySmartVehicle,
+    applyAiDraft,
+    saveAiDraft,
     calculateSmartRoute,
     readSharedRouteLink,
     syncTrackerNow,

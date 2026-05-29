@@ -1,10 +1,10 @@
-﻿(function () {
+(function () {
   "use strict";
 
   const { $, esc, parseMoney, toast, statusClass, routeKm, mapsRouteUrl, statusKey, statusLabel, isFinalStatus, setupCollapsiblePanels, pointFrom } = window.JM.utils;
   const { auth, db, arrayUnion, getRealtimeDb, rtdbKey } = window.JM.firebase;
   const cfg = window.JM_CONFIG || {};
-  const DRIVER_FLOW_VERSION = "jm-v25-laudos-financeiro-layout";
+  const DRIVER_FLOW_VERSION = "jm-v27-mapa-ia-fechamento";
   const state = { user: null, profile: null, calls: {}, vehicles: {}, expenses: {}, settings: {}, selectedCallId: "", driverLivePoint: null };
   const unsubscribers = [];
   let driverLocationWatchId = null;
@@ -780,7 +780,7 @@
       const url = call.routeExternalUrl || call.routeUrl || mapsRouteUrl(call, vehicle);
       const km = routeKm(call, vehicle);
       const metric = call.routeDistanceText || call.routeMetrics && call.routeMetrics.fullRoute && call.routeMetrics.fullRoute.distanceText || (km ? km.toFixed(1).replace(".", ",") + " km estimados" : "aguardando coordenadas");
-      const routeBadge = call.routePrecision === "osrm_openstreetmap" || call.routeMetrics && call.routeMetrics.fullRoute && call.routeMetrics.fullRoute.isPrecise ? `<span class="badge ok">Rota por ruas OSM</span>` : `<span class="badge warn">Rota estimada/fallback</span>`;
+      const routeBadge = call.routePrecision === "osrm_openstreetmap" || call.routeMetrics && call.routeMetrics.fullRoute && call.routeMetrics.fullRoute.isPrecise ? `<span class="badge ok">Rota por ruas</span>` : `<span class="badge warn">Rota estimada/fallback</span>`;
       const proof = proofBadge(call);
       return `<div class="card" style="margin-bottom:10px">
         <div class="actions" style="justify-content:space-between">
@@ -802,7 +802,7 @@
           <button class="btn good" onclick="JM.motorista.setStatus('${esc(call.id)}','finalizado')">Finalizar</button>
         </div>
       </div>`;
-    }).join("") + `<div class="report-signature">Powered by thIAguinho Soluções Digitais</div>` : `<p class="muted">Nenhum chamado vinculado ao seu usuário.</p>`;
+    }).join("") : `<p class="muted">Nenhum chamado vinculado ao seu usuário.</p>`;
   }
 
   function renderExpenseSelects() {

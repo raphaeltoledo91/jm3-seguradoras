@@ -1,13 +1,13 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#07111f">
   <title>JM Guinchos - Gestor</title>
-  <link rel="manifest" href="manifest.json?v=jm-v25-laudos-financeiro-layout">
+  <link rel="manifest" href="manifest.json?v=jm-v27-mapa-ia-fechamento">
   <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="css/style.css?v=jm-v25-laudos-financeiro-layout">
+  <link rel="stylesheet" href="css/style.css?v=jm-v27-mapa-ia-fechamento">
 </head>
 <body>
   <section id="loginView" class="login">
@@ -31,15 +31,16 @@
   </section>
 
   <section id="appView" class="app hidden">
-    <aside class="sidebar">
+    <aside class="sidebar" id="appSidebar">
       <div class="sidebar-head">
-        <div class="brand-row" style="margin-bottom:0">
+        <div class="brand-row sidebar-brand" style="margin-bottom:0">
           <div class="brand-mark">JM</div>
           <div>
             <div class="sidebar-title">JM GUINCHOS</div>
             <div class="sidebar-sub">gestão operacional</div>
           </div>
         </div>
+        <button class="sidebar-toggle" id="sidebarToggle" type="button" title="Recolher menu" aria-label="Recolher menu" aria-pressed="false">☰</button>
       </div>
       <nav class="nav" id="navButtons" aria-label="Módulos principais">
         <div class="nav-group-title">Operação</div>
@@ -48,6 +49,7 @@
         <button data-view="chamados" data-icon="CH">Chamados</button>
         <button data-view="finalizados" data-icon="OK">Finalizados</button>
         <button data-view="mapa" data-icon="MP">Mapa / Tracker</button>
+        <button data-view="assistente" data-icon="IA">Assistente IA</button>
         <div class="nav-group-title">Comercial</div>
         <button data-view="clientes" data-icon="CL">Clientes / Seguradoras</button>
         <button data-view="integracoes" data-icon="IN">Integrações</button>
@@ -84,7 +86,15 @@
             <div class="card kpi col-3"><span>Frota online</span><strong id="kpiOnline">0</strong></div>
             <div id="dashboardOpsKpis" class="col-12 dash-kpi-grid"></div>
             <div class="panel col-7">
-              <h2>Mapa operacional</h2>
+              <div class="panel-head">
+                <h2>Mapa operacional</h2>
+                <label class="map-layer-control">Mapa
+                  <select class="mapProviderSelect" aria-label="Tipo de mapa">
+                    <option value="google_road">Google Road</option>
+                    <option value="google_hybrid">Google Híbrido</option>
+                  </select>
+                </label>
+              </div>
               <div id="dashboardMap" class="map"></div>
             </div>
             <div class="panel col-5">
@@ -99,7 +109,7 @@
             <div class="ops-head panel">
               <div>
                 <h2>Central operacional 24h</h2>
-                <p class="muted small">Despacho em tempo real para seguradoras, particulares, socorros, muncks e remoções. Mapa vivo com Tracker RAFA + rotas gratuitas OSM/OSRM.</p>
+                <p class="muted small">Despacho em tempo real para seguradoras, particulares, socorros, muncks e remoções. Mapa vivo com Tracker RAFA, Google Road/Híbrido e rotas por ruas.</p>
               </div>
               <div class="ops-filters">
                 <select id="opsStatusFilter" aria-label="Filtro de status operacional">
@@ -139,6 +149,12 @@
                     <div id="opsMapHint" class="muted small">Selecione um chamado e um veículo para destacar rota, origem e destino.</div>
                   </div>
                   <div class="actions">
+                    <label class="map-layer-control">Mapa
+                      <select class="mapProviderSelect" aria-label="Tipo de mapa da operação">
+                        <option value="google_road">Google Road</option>
+                        <option value="google_hybrid">Google Híbrido</option>
+                      </select>
+                    </label>
                     <button class="btn good" id="btnOpsAssignVehicle" type="button">Despachar veículo selecionado</button>
                     <button class="btn" id="btnOpsOpenRoute" type="button">Abrir rota</button>
                     <button class="btn" id="btnOpsCopyRoute" type="button">Copiar link</button>
@@ -227,7 +243,7 @@
                       <button class="btn" id="btnOpenGoogleRoute" type="button">Abrir rota no Maps</button>
                     </div>
                   </div>
-                  <div id="smartRouteBox" class="smart-route-box small muted">Modo gratuito: use coordenadas ou link com coordenadas. O algoritmo usa Tracker RAFA + OpenStreetMap/OSRM para desenhar a rota por ruas; se falhar, mantém fallback estimado.</div>
+                  <div id="smartRouteBox" class="smart-route-box small muted">Use coordenadas ou link com coordenadas. O algoritmo usa Tracker RAFA e rota por ruas; se falhar, mantém fallback estimado.</div>
                 </div>
                 <div class="wide tow-pricing-card">
                   <div class="actions" style="justify-content:space-between;align-items:center">
@@ -265,6 +281,26 @@
             </div>
             <div class="panel col-7">
               <h2>Chamados em tempo real</h2>
+              <div class="module-toolbar" aria-label="Filtros dos chamados">
+                <input id="callsSearch" placeholder="Buscar protocolo, cliente, placa, rota ou seguradora">
+                <select id="callsStatusFilter" aria-label="Status do chamado">
+                  <option value="">Todos os status</option>
+                  <option value="aguardando_despacho">Aguardando despacho</option>
+                  <option value="despachado">Despachado</option>
+                  <option value="motorista_a_caminho">Motorista a caminho</option>
+                  <option value="motorista_no_local">Motorista no local</option>
+                  <option value="veiculo_carregado">Veículo carregado</option>
+                  <option value="em_transporte">Em transporte</option>
+                </select>
+                <select id="callsSourceFilter" aria-label="Origem comercial">
+                  <option value="">Todas origens</option>
+                  <option value="Seguradora">Seguradora</option>
+                  <option value="Assistência 24h">Assistência 24h</option>
+                  <option value="Particular">Particular</option>
+                  <option value="Empresa parceira">Empresa parceira</option>
+                </select>
+                <button class="btn" id="callsClearFilters" type="button">Limpar</button>
+              </div>
               <div id="callsTable" class="table-wrap"></div>
             </div>
             <div class="panel col-12">
@@ -279,6 +315,19 @@
             <div class="panel col-12">
               <h2>Chamados finalizados e fechados</h2>
               <p class="muted small">Chamado finalizado fica travado. Reabertura exige autorização de gestor/gerente e motivo auditado.</p>
+              <div class="module-toolbar" aria-label="Filtros de finalizados">
+                <input id="finalizedSearch" placeholder="Buscar protocolo, cliente, placa, seguradora ou motorista">
+                <select id="finalizedBillingFilter" aria-label="Status de cobrança">
+                  <option value="">Todas cobranças</option>
+                  <option value="aguardando_provas">Aguardando provas</option>
+                  <option value="a_faturar">A faturar</option>
+                  <option value="a_receber">A receber</option>
+                  <option value="fechado_a_receber">Fechado a receber</option>
+                  <option value="recebido">Recebido</option>
+                  <option value="glosado">Glosado</option>
+                </select>
+                <button class="btn" id="finalizedClearFilters" type="button">Limpar</button>
+              </div>
               <div id="finalizedCallsTable" class="table-wrap"></div>
             </div>
           </div>
@@ -342,12 +391,44 @@
           </div>
         </section>
 
+        <section id="view-assistente" class="view">
+          <div class="grid">
+            <div class="panel col-5 ai-panel">
+              <h2>Assistente IA</h2>
+              <p class="muted small">Cole texto ou envie um print para montar rascunhos de chamado, lançamento financeiro ou despesa. Revise antes de salvar.</p>
+              <div class="ai-upload-box">
+                <input id="aiSourceFile" type="file" accept="image/*,.pdf">
+                <div id="aiFilePreview" class="ai-file-preview muted small">Nenhum arquivo selecionado.</div>
+              </div>
+              <textarea id="aiSourceText" class="ai-textarea" placeholder="Cole aqui print transcrito, conversa, acionamento, nota, despesa ou cobrança."></textarea>
+              <div class="actions">
+                <button class="btn" id="btnAiExtract" type="button">Ler print</button>
+                <button class="btn primary" id="btnAiAnalyze" type="button">Gerar rascunhos</button>
+                <button class="btn" id="btnAiClear" type="button">Limpar</button>
+              </div>
+              <div id="aiStatus" class="small muted">O salvamento só acontece depois da revisão.</div>
+            </div>
+            <div class="panel col-7 ai-panel">
+              <h2>Revisão antes de salvar</h2>
+              <div id="aiReviewBox" class="ai-review-box"><p class="muted">Nenhum rascunho gerado ainda.</p></div>
+            </div>
+          </div>
+        </section>
+
         <section id="view-mapa" class="view">
           <div class="grid">
             <div class="panel col-12">
               <h2>Rastreamento e rotas</h2>
-              <p class="muted small">Mapa gratuito Leaflet/OpenStreetMap. O sistema usa posições normalizadas dos rastreadores cadastrados, preservando RAFA e usando GPS celular como fallback quando habilitado.</p>
-              <div class="actions" style="margin-bottom:10px"><button class="btn primary" id="btnSyncTrackerNow" type="button">Atualizar rastreadores agora</button><a class="btn" target="_blank" rel="noopener noreferrer" href="https://gps2.rafacarrastreadores.com.br">Abrir plataforma RAFA</a></div>
+              <p class="muted small">Mapa com visual Google Road ou Híbrido, posições normalizadas dos rastreadores cadastrados, RAFA preservado e GPS celular como fallback quando habilitado.</p>
+              <div class="actions" style="margin-bottom:10px">
+                <label class="map-layer-control">Mapa
+                  <select class="mapProviderSelect" aria-label="Tipo de mapa da frota">
+                    <option value="google_road">Google Road</option>
+                    <option value="google_hybrid">Google Híbrido</option>
+                  </select>
+                </label>
+                <button class="btn primary" id="btnSyncTrackerNow" type="button">Atualizar rastreadores agora</button><a class="btn" target="_blank" rel="noopener noreferrer" href="https://gps2.rafacarrastreadores.com.br">Abrir plataforma RAFA</a>
+              </div>
               <div id="fleetMap" class="map"></div>
             </div>
             <div class="panel col-12">
@@ -428,8 +509,36 @@
             </div>
             <div class="panel col-12 finance-results-panel">
               <h2>Contas a receber e a pagar</h2>
+              <div class="module-toolbar" aria-label="Filtros de pagamentos">
+                <input id="paymentSearch" placeholder="Buscar seguradora, documento, descrição ou chamado">
+                <select id="paymentTypeFilter" aria-label="Tipo de pagamento">
+                  <option value="">Todos</option>
+                  <option value="entrada">A receber</option>
+                  <option value="saida">A pagar</option>
+                </select>
+                <select id="paymentStatusFilter" aria-label="Status de pagamento">
+                  <option value="">Todos os status</option>
+                  <option value="a receber">A receber</option>
+                  <option value="recebido">Recebido</option>
+                  <option value="pendente">Pendente</option>
+                  <option value="pago">Pago</option>
+                  <option value="glosado">Glosado</option>
+                </select>
+                <button class="btn" id="paymentClearFilters" type="button">Limpar</button>
+              </div>
               <div id="paymentsSummary"></div>
               <div id="paymentsTable" class="table-wrap"></div>
+            </div>
+            <div class="panel col-12 insurance-closing-panel">
+              <h2>Fechamento seguradoras</h2>
+              <div class="module-toolbar" aria-label="Filtros de fechamento">
+                <input id="closingSearch" placeholder="Buscar seguradora, protocolo, placa ou cliente">
+                <input id="closingMonthFilter" type="month" aria-label="Mês do fechamento">
+                <button class="btn" id="closingClearFilters" type="button">Limpar</button>
+              </div>
+              <div id="insuranceClosingSummary"></div>
+              <div id="insuranceClosingTable" class="table-wrap"></div>
+              <div id="insuranceClosingReview" class="closing-review"></div>
             </div>
           </div>
         </section>
@@ -501,19 +610,19 @@
     </main>
   </section>
 
-  <footer class="signature-footer">Powered by thIAguinho Soluções Digitais</footer>
+  <footer class="signature-footer" aria-hidden="true"></footer>
   <div id="toast" class="toast"></div>
 
-  <script src="js/config.firebase.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/config.firebase.js?v=jm-v27-mapa-ia-fechamento"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
-  <script src="js/utils.js?v=jm-v25-laudos-financeiro-layout"></script>
-  <script src="js/firebase.js?v=jm-v25-laudos-financeiro-layout"></script>
-  <script src="js/tracker.js?v=jm-v25-laudos-financeiro-layout"></script>
-  <script src="js/google-maps.js?v=jm-v25-laudos-financeiro-layout"></script>
-  <script src="js/mapa.js?v=jm-v25-laudos-financeiro-layout"></script>
-  <script src="js/app.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/utils.js?v=jm-v27-mapa-ia-fechamento"></script>
+  <script src="js/firebase.js?v=jm-v27-mapa-ia-fechamento"></script>
+  <script src="js/tracker.js?v=jm-v27-mapa-ia-fechamento"></script>
+  <script src="js/google-maps.js?v=jm-v27-mapa-ia-fechamento"></script>
+  <script src="js/mapa.js?v=jm-v27-mapa-ia-fechamento"></script>
+  <script src="js/app.js?v=jm-v27-mapa-ia-fechamento"></script>
 </body>
 </html>

@@ -391,7 +391,7 @@
       },
       updatedAt: new Date().toISOString()
     }, { merge: true });
-    toast(apiKey ? "Google Maps opcional salvo. O sistema usara Places/Geocoding quando disponivel e mantem fallback gratuito." : "Mapa gratuito salvo. O sistema usara OpenStreetMap/OSRM e Nominatim sem API paga.", "ok");
+    toast(apiKey ? "Google Maps opcional salvo. O sistema usará Places/Geocoding quando disponível." : "Configuração de mapa salva com rota por ruas e fallback estimado.", "ok");
   };
 
   if ($("superMobileGpsForm")) $("superMobileGpsForm").onsubmit = async (e) => {

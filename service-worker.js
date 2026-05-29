@@ -1,4 +1,4 @@
-﻿const CACHE_NAME = "jm-v25-laudos-financeiro-layout";
+const CACHE_NAME = "jm-v27-mapa-ia-fechamento";
 const ASSETS = [
   "./",
   "./index.html",

@@ -44,15 +44,61 @@
   }
 
   const liveMaps = {};
+  const tileLayers = {};
+  const MAP_TILE_PROVIDERS = {
+    google_road: {
+      name: "Google Road",
+      url: "https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
+      options: { subdomains: ["0", "1", "2", "3"], maxZoom: 20, attribution: "&copy; Google" }
+    },
+    google_hybrid: {
+      name: "Google Híbrido",
+      url: "https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+      options: { subdomains: ["0", "1", "2", "3"], maxZoom: 20, attribution: "&copy; Google" }
+    },
+    osm_road: {
+      name: "OpenStreetMap",
+      url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      options: { maxZoom: 19, attribution: "&copy; OpenStreetMap" }
+    }
+  };
 
   function resetMap(containerId, container) {
     if (liveMaps[containerId]) {
       try { liveMaps[containerId].remove(); } catch (_) {}
       delete liveMaps[containerId];
+      delete tileLayers[containerId];
     }
     if (container && container._leaflet_id) {
       try { container._leaflet_id = null; } catch (_) {}
     }
+  }
+
+  function selectedTileProvider() {
+    const settings = window.JM_MAP_SETTINGS || {};
+    const key = settings.provider || settings.tileProvider || settings.mapProvider || "google_road";
+    return MAP_TILE_PROVIDERS[key] || MAP_TILE_PROVIDERS.google_road;
+  }
+
+  function addBaseLayer(L, map, containerId) {
+    const provider = selectedTileProvider();
+    const layer = L.tileLayer(provider.url, Object.assign({}, provider.options || {}));
+    tileLayers[containerId] = layer;
+    layer.addTo(map);
+    return layer;
+  }
+
+  function fitVisibleBounds(map, bounds, options) {
+    const clean = (bounds || []).filter((p) => Array.isArray(p) && Number.isFinite(Number(p[0])) && Number.isFinite(Number(p[1])));
+    if (!clean.length) return;
+    if (clean.length === 1) {
+      map.setView(clean[0], options && options.singleZoom || 16);
+      return;
+    }
+    map.fitBounds(clean, {
+      padding: options && options.padding || [56, 56],
+      maxZoom: options && options.maxZoom || 16
+    });
   }
 
   function routeTitle(call, route, fallbackKm) {
@@ -243,7 +289,7 @@
     const label = esc(vehicle && (vehicle.placa || vehicle.id || "JM") || "JM");
     const title = esc(vehicle && (vehicle.apelido || vehicle.tipo || "Frota") || "Frota");
     const course = vehicleCourse(vehicle);
-    const size = selected ? 54 : 46;
+    const size = selected ? 46 : 38;
     const classes = [
       "jm-vehicle-image-marker",
       "tone-" + tone,
@@ -259,9 +305,9 @@
         <span class="jm-vehicle-status-dot"></span>
         <strong>${label}</strong>
       </div>`,
-      iconSize: [size + 36, size + 28],
-      iconAnchor: [Math.round((size + 36) / 2), Math.round(size / 2)],
-      popupAnchor: [0, -Math.round(size * 0.56)]
+      iconSize: [size + 30, size + 24],
+      iconAnchor: [Math.round((size + 30) / 2), Math.round(size / 2)],
+      popupAnchor: [0, -Math.round(size * 0.62)]
     });
   }
 
@@ -306,7 +352,7 @@
       container.innerHTML = `<div style="height:100%;display:grid;place-items:center;padding:24px;text-align:center;background:#07110f">
         <div>
           <h3>Mapa aguardando dados reais</h3>
-          <p class="muted small">Configure o tracker no <b>superadmin.html</b> ou registre um chamado com origem/destino validados para aparecer no mapa.</p>
+          <p class="muted small">Cadastre rastreadores na frota ou registre um chamado com origem/destino validados para aparecer no mapa.</p>
         </div>
       </div>`;
       return;
@@ -318,17 +364,16 @@
       const map = L.map(containerId, { scrollWheelZoom: false, preferCanvas: true, zoomControl: false });
       liveMaps[containerId] = map;
       L.control.zoom({ position: "bottomright" }).addTo(map);
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-        maxZoom: 19,
-        attribution: "&copy; OpenStreetMap &copy; CARTO"
-      }).addTo(map);
+      addBaseLayer(L, map, containerId);
       const bounds = [];
+      const focusBounds = [];
       located.forEach((vehicle) => {
         const livePoint = vehicleLivePoint(vehicle);
         if (!livePoint) return;
         const p = [Number(livePoint.lat), Number(livePoint.lng)];
         bounds.push(p);
         const isSelected = options.selectedVehicleId && vehicle.id === options.selectedVehicleId;
+        if (isSelected) focusBounds.push(p);
         const marker = L.marker(p, { icon: vehicleIcon(L, vehicle, isSelected), zIndexOffset: isSelected ? 900 : 0 }).addTo(map)
           .bindPopup(vehiclePopupHtml(vehicle, livePoint), {
             className: "jm-vehicle-leaflet-popup",
@@ -345,13 +390,13 @@
         pts.forEach((p) => {
           const latlng = [p.point.lat, p.point.lng];
           bounds.push(latlng);
+          if (callSelected) focusBounds.push(latlng);
           const kindColor = p.kind === "origin" ? "#22c55e" : p.kind === "destination" ? "#ef4444" : p.kind === "driver_phone" ? "#a78bfa" : p.kind === "vehicle" ? "#2dd4bf" : "#f8b84e";
           L.circleMarker(latlng, { radius: callSelected ? 9 : 6, weight: callSelected ? 4 : 2, color: kindColor, fillOpacity: callSelected ? 0.45 : 0.25 }).addTo(map).bindPopup(`<b>${esc(p.label || "Ponto")}</b><br>${esc(call.protocolo || call.cliente || "Chamado")}`);
         });
         if (pts.length >= 2) await addRouteLayer(L, map, call, pts, bounds);
       }
-      if (bounds.length === 1) map.setView(bounds[0], 15);
-      else map.fitBounds(bounds, { padding: [48, 48] });
+      fitVisibleBounds(map, focusBounds.length ? focusBounds : bounds, { singleZoom: 16, maxZoom: focusBounds.length ? 17 : 15, padding: focusBounds.length ? [70, 70] : [48, 48] });
       setTimeout(() => map.invalidateSize(), 120);
     } catch (err) {
       console.warn(err);
@@ -366,6 +411,19 @@
     });
   }
 
+  function setMapProvider(provider) {
+    const next = MAP_TILE_PROVIDERS[provider] ? provider : "google_road";
+    window.JM_MAP_SETTINGS = Object.assign({}, window.JM_MAP_SETTINGS || {}, { provider: next });
+    Object.entries(liveMaps).forEach(([containerId, map]) => {
+      try {
+        if (tileLayers[containerId]) map.removeLayer(tileLayers[containerId]);
+        addBaseLayer(window.L, map, containerId);
+      } catch (err) {
+        console.warn("Falha ao trocar camada do mapa", err);
+      }
+    });
+  }
+
   window.JM = window.JM || {};
-  window.JM.mapa = { renderFleetMap, invalidateAll };
+  window.JM.mapa = { renderFleetMap, invalidateAll, setMapProvider };
 }());

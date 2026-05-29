@@ -1,10 +1,10 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>JM Guinchos - Relatório de Provas</title>
-  <link rel="stylesheet" href="css/style.css?v=jm-v25-laudos-financeiro-layout">
+  <link rel="stylesheet" href="css/style.css?v=jm-v27-mapa-ia-fechamento">
   <style>
     body { background:#f8fafc; color:#0f172a; }
     .report-page { max-width: 1060px; margin: 0 auto; padding: 24px; }
@@ -19,7 +19,7 @@
     .report-photo span { display:block; padding:8px; color:#475569; }
     .report-stage { break-inside: avoid; border:1px solid #dbe3ef; border-radius:10px; padding:12px; margin-bottom:12px; background:#fff; }
     .report-stage .report-grid { grid-template-columns: repeat(4,minmax(0,1fr)); }
-    .signature-image { max-width:100%; border:1px solid #dbe3ef; border-radius:8px; background:#fff; }
+    .signature-image { width:100%; max-width:360px; height:92px; object-fit:contain; border:1px solid #dbe3ef; border-radius:8px; background:#fff; }
     .print-actions { position: sticky; top: 0; background:#f8fafc; padding:10px 0; z-index: 5; }
     @media print {
       .print-actions { display:none; }
@@ -27,6 +27,7 @@
       .report-page { padding:0; }
       .report-card { border:0; border-bottom:1px solid #dbe3ef; border-radius:0; }
       .report-photo img { height:82px; }
+      .signature-image { height:78px; }
       .report-stage .report-grid { grid-template-columns: repeat(4,minmax(0,1fr)); }
       .signature-footer { position: fixed; bottom: 8px; left:0; right:0; }
     }
@@ -70,12 +71,12 @@
       <div id="reportSignatures" class="report-grid"></div>
     </section>
   </main>
-  <footer class="signature-footer">Powered by thIAguinho Soluções Digitais</footer>
+  <footer class="signature-footer" aria-hidden="true"></footer>
 
-  <script src="js/config.firebase.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/config.firebase.js?v=jm-v27-mapa-ia-fechamento"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
-  <script src="js/utils.js?v=jm-v25-laudos-financeiro-layout"></script>
+  <script src="js/utils.js?v=jm-v27-mapa-ia-fechamento"></script>
   <script>
     (function () {
       "use strict";
