@@ -19,29 +19,65 @@ service cloud.firestore {
     function isActiveProfile() {
       return signedIn() && profile().active != false;
     }
+    function hasModulePermission(moduleId) {
+      return isActiveProfile()
+        && 'permissions' in profile()
+        && 'modules' in profile().permissions
+        && moduleId in profile().permissions.modules
+        && profile().permissions.modules[moduleId] == true;
+    }
+    function hasDashboardPermission(dashboardId) {
+      return isActiveProfile()
+        && 'permissions' in profile()
+        && 'dashboards' in profile().permissions
+        && dashboardId in profile().permissions.dashboards
+        && profile().permissions.dashboards[dashboardId] == true;
+    }
     function isOwner() {
       return isActiveProfile()
-        && profile().role in ['admin', 'superadmin', 'gestor', 'manager', 'owner'];
+        && (profile().role in ['admin', 'superadmin', 'gestor', 'manager', 'owner']
+          || hasModulePermission('equipe'));
     }
     function isFinance() {
       return isActiveProfile()
-        && profile().role in ['admin', 'finance', 'superadmin', 'gestor', 'manager', 'owner'];
+        && (profile().role in ['admin', 'finance', 'superadmin', 'gestor', 'manager', 'owner']
+          || hasModulePermission('financeiro')
+          || hasModulePermission('pagamentos')
+          || hasDashboardPermission('financeiro')
+          || hasDashboardPermission('contas_pagar')
+          || hasDashboardPermission('contas_receber')
+          || hasDashboardPermission('cobrancas')
+          || hasDashboardPermission('faturas'));
     }
     function isManager() {
       return isActiveProfile()
-        && profile().role in ['admin', 'superadmin', 'gestor', 'manager', 'owner', 'gerente'];
+        && (profile().role in ['admin', 'superadmin', 'gestor', 'manager', 'owner', 'gerente']
+          || hasModulePermission('frota')
+          || hasModulePermission('equipe'));
     }
     function canOperateCalls() {
       return isActiveProfile()
-        && profile().role in ['admin', 'finance', 'superadmin', 'gestor', 'gerente', 'manager', 'owner', 'auxiliar', 'atendente'];
+        && (profile().role in ['admin', 'finance', 'superadmin', 'gestor', 'gerente', 'manager', 'owner', 'auxiliar', 'atendente']
+          || hasModulePermission('operacao')
+          || hasModulePermission('chamados')
+          || hasModulePermission('finalizados')
+          || hasModulePermission('integracoes'));
     }
     function isOffice() {
       return isActiveProfile()
-        && profile().role in ['admin', 'finance', 'superadmin', 'gestor', 'gerente', 'manager', 'owner', 'auxiliar', 'atendente'];
+        && (profile().role in ['admin', 'finance', 'superadmin', 'gestor', 'gerente', 'manager', 'owner', 'auxiliar', 'atendente']
+          || hasModulePermission('dashboard')
+          || hasModulePermission('operacao')
+          || hasModulePermission('chamados')
+          || hasModulePermission('clientes')
+          || hasDashboardPermission('principal'));
     }
     function canManageFleet() {
       return isActiveProfile()
-        && profile().role in ['admin', 'superadmin', 'gestor', 'gerente', 'manager', 'owner'];
+        && (profile().role in ['admin', 'superadmin', 'gestor', 'gerente', 'manager', 'owner']
+          || hasModulePermission('frota')
+          || hasModulePermission('mapa')
+          || hasDashboardPermission('monitoramento_fibra'));
     }
     function isDriver() {
       return isActiveProfile()

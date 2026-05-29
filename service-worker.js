@@ -1,4 +1,4 @@
-﻿const CACHE_NAME = "jm-v25-laudos-financeiro-layout";
+﻿const CACHE_NAME = "jm-v26-ixc-dashboards-permissoes";
 const ASSETS = [
   "./",
   "./index.html",
@@ -16,6 +16,7 @@ const ASSETS = [
   "./js/tracker.js",
   "./js/google-maps.js",
   "./js/mapa.js",
+  "./js/dashboard-ixc.js",
   "./js/app.js",
   "./js/motorista.js",
   "./js/superadmin.js",
@@ -33,7 +34,6 @@ self.addEventListener("activate", (event) => {
       .then(() => self.clients.claim())
   );
 });
-
 function isHtmlOrCode(request) {
   const url = new URL(request.url);
   return request.mode === "navigate" || /\.(html|js|css|json)$/i.test(url.pathname);

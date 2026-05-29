@@ -4,9 +4,79 @@
   const { $, esc, toast } = window.JM.utils;
   const { auth, secondaryAuth, db, ts, emailIsSuperAdmin } = window.JM.firebase;
   const cfg = window.JM_CONFIG || {};
+  const ixcDashboards = window.JM.ixcDashboards || { all: () => [], modules: () => [] };
   let settings = {};
   let vehicles = {};
   let trackerProviders = {};
+
+  function permissionPresetForRole(role) {
+    const normalized = normalizedRole(role);
+    const isOwner = ["owner", "admin", "gestor", "manager", "superadmin"].includes(normalized);
+    const isFinance = normalized === "finance";
+    const isGerente = normalized === "gerente";
+    const isOperation = ["auxiliar", "atendente"].includes(normalized);
+    const modules = {};
+    const dashboards = {};
+    ixcDashboards.modules().forEach((item) => {
+      if (normalized === "driver" || normalized === "motorista") {
+        modules[item.key] = false;
+        return;
+      }
+      if (isOwner) modules[item.key] = true;
+      else if (isFinance) modules[item.key] = ["dashboard", "chamados", "finalizados", "clientes", "financeiro", "pagamentos"].includes(item.key);
+      else if (isGerente) modules[item.key] = ["dashboard", "operacao", "chamados", "finalizados", "mapa", "clientes", "integracoes", "frota"].includes(item.key);
+      else if (isOperation) modules[item.key] = ["dashboard", "operacao", "chamados", "finalizados", "mapa", "clientes", "integracoes"].includes(item.key);
+      else modules[item.key] = item.key === "dashboard";
+    });
+    ixcDashboards.all().forEach((item) => {
+      if (normalized === "driver" || normalized === "motorista") {
+        dashboards[item.key] = false;
+        return;
+      }
+      if (isOwner) dashboards[item.key] = true;
+      else if (isFinance) dashboards[item.key] = item.area === "financeiro" || ["busca", "principal", "ixc_soft"].includes(item.key);
+      else if (isGerente) dashboards[item.key] = item.area !== "financeiro" && item.key !== "servidor";
+      else if (isOperation) dashboards[item.key] = ["busca", "principal", "atendimentos", "colaborador", "ordem_servico", "negociacoes", "crm", "crm_pessoa_fisica", "ixc_soft"].includes(item.key);
+      else dashboards[item.key] = ["busca", "principal", "ixc_soft"].includes(item.key);
+    });
+    return { modules, dashboards };
+  }
+
+  function renderPermissionMatrix(role) {
+    const box = $("adminPermissionMatrix");
+    if (!box) return;
+    const preset = permissionPresetForRole(role || ($("adminRole") && $("adminRole").value) || "admin");
+    const moduleRows = ixcDashboards.modules().map((item) => permissionCheckbox("modules", item.key, item.label, item.group, preset.modules[item.key])).join("");
+    const dashboardRows = ixcDashboards.all().map((item) => permissionCheckbox("dashboards", item.key, item.label, item.area, preset.dashboards[item.key])).join("");
+    box.innerHTML = `
+      <section>
+        <h3>Módulos principais</h3>
+        <div class="permission-check-list">${moduleRows}</div>
+      </section>
+      <section>
+        <h3>Dashboards e submódulos</h3>
+        <div class="permission-check-list">${dashboardRows}</div>
+      </section>`;
+  }
+
+  function permissionCheckbox(area, key, label, group, checked) {
+    return `<label class="permission-check">
+      <input type="checkbox" data-permission-area="${esc(area)}" data-permission-key="${esc(key)}" ${checked ? "checked" : ""}>
+      <span><b>${esc(label)}</b><small>${esc(group || area)}</small></span>
+    </label>`;
+  }
+
+  function permissionsFromMatrix(role) {
+    if (!$("adminPermissionMatrix")) return permissionPresetForRole(role);
+    const out = { modules: {}, dashboards: {} };
+    document.querySelectorAll("#adminPermissionMatrix input[data-permission-area][data-permission-key]").forEach((input) => {
+      const area = input.dataset.permissionArea;
+      const key = input.dataset.permissionKey;
+      if (!out[area]) out[area] = {};
+      out[area][key] = input.checked;
+    });
+    return out;
+  }
 
 
 
@@ -471,18 +541,24 @@
     return labels[normalizedRole(role)] || role || "Usuário";
   }
 
+  if ($("adminRole")) $("adminRole").onchange = () => renderPermissionMatrix($("adminRole").value);
+  if ($("adminApplyRolePermissions")) $("adminApplyRolePermissions").onclick = () => renderPermissionMatrix($("adminRole") ? $("adminRole").value : "admin");
+  renderPermissionMatrix($("adminRole") ? $("adminRole").value : "admin");
+
   $("adminUserForm").onsubmit = async (e) => {
     e.preventDefault();
     const email = $("adminEmail").value.trim().toLowerCase();
     const pass = $("adminPass").value;
     const nome = $("adminName").value.trim();
     const role = normalizedRole($("adminRole") ? $("adminRole").value : "admin") || "admin";
+    const permissions = permissionsFromMatrix(role);
     if (!pass || pass.length < 6) return toast("Senha mínima: 6 caracteres.", "danger");
 
     const userPayload = {
       nome,
       email,
       role,
+      permissions,
       active: true,
       updatedAt: new Date().toISOString(),
       updatedBy: auth.currentUser && auth.currentUser.uid || "",
